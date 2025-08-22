@@ -3,3 +3,6 @@ python-docx
 reportlab
 google-generativeai
 openai
+PyPDF2
+plotly
+textstat
