@@ -1,9 +1,15 @@
 import streamlit as st
 import os
 import tempfile
+import textwrap
 from docx import Document
 from docx.shared import Pt, RGBColor
-from fpdf import FPDF
+# Using a more robust PDF generation library: reportlab
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib.colors import HexColor
 import google.generativeai as genai
 from openai import OpenAI
 
@@ -51,41 +57,43 @@ def format_docx(content, file_path):
         st.error(f"Error creating DOCX file: {e}")
 
 def format_pdf(content, file_path):
-    """Formats the given text content and saves it as a PDF file."""
+    """
+    Formats the given text content and saves it as a PDF file using the robust ReportLab library.
+    This permanently fixes issues with long words and text wrapping.
+    """
     try:
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.set_font("Arial", size=11)
+        doc = SimpleDocTemplate(file_path, pagesize=letter, rightMargin=inch, leftMargin=inch, topMargin=inch, bottomMargin=inch)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Add custom styles for headers and bullet points, using a unique name for the bullet style.
+        styles.add(ParagraphStyle(name='Header', fontName='Helvetica-Bold', fontSize=12, spaceBefore=12, spaceAfter=6, textColor=HexColor('#003366')))
+        styles.add(ParagraphStyle(name='CustomBullet', parent=styles['Normal'], leftIndent=20, firstLineIndent=0, spaceBefore=2))
 
-        # Encode the content to latin-1, replacing unsupported characters.
-        # This prevents crashes from unicode characters like '–' or '’'.
-        cleaned_content = content.encode('latin-1', 'replace').decode('latin-1')
-
-        for line in cleaned_content.split("\n"):
+        for line in content.split("\n"):
             line = line.strip()
             if not line:
-                pdf.ln(5) # Add space for empty lines
                 continue
 
             # Section headers
             if line.isupper() and len(line.split()) < 6:
-                pdf.set_font("Arial", "B", 12)
-                pdf.set_text_color(0, 51, 102) # Dark blue
-                pdf.cell(0, 10, line, ln=True, align="L")
-                pdf.set_font("Arial", size=11)
-                pdf.set_text_color(0, 0, 0) # Reset to black
+                p = Paragraph(line, styles['Header'])
+                story.append(p)
             # Bullet points
             elif line.startswith(("-", "•", "*")):
-                pdf.cell(5) # Indentation
-                pdf.multi_cell(0, 5, f"• {line[1:].strip()}")
+                # ReportLab uses a <bullet> tag for proper formatting
+                bullet_text = f"<bullet>&bull;</bullet>{line[1:].strip()}"
+                p = Paragraph(bullet_text, styles['CustomBullet'])
+                story.append(p)
             # Regular text
             else:
-                pdf.multi_cell(0, 5, line)
-
-        pdf.output(file_path)
+                p = Paragraph(line, styles['Normal'])
+                story.append(p)
+        
+        doc.build(story)
     except Exception as e:
-        st.error(f"Error creating PDF file: {e}")
+        st.error(f"An unexpected error occurred during PDF creation: {e}")
+
 
 # ------------------------------------------------------------------
 # AI Resume Tailoring Logic
@@ -246,14 +254,18 @@ if st.button("✨ Generate Tailored Resume", type="primary", use_container_width
                                     use_container_width=True
                                 )
                         with dl_col2:
-                            with open(pdf_path, "rb") as f_pdf:
-                                st.download_button(
-                                    "⬇️ Download PDF",
-                                    data=f_pdf,
-                                    file_name="Tailored_Resume.pdf",
-                                    mime="application/pdf",
-                                    use_container_width=True
-                                )
+                            # Check if PDF was created before showing download button
+                            if os.path.exists(pdf_path):
+                                with open(pdf_path, "rb") as f_pdf:
+                                    st.download_button(
+                                        "⬇️ Download PDF",
+                                        data=f_pdf,
+                                        file_name="Tailored_Resume.pdf",
+                                        mime="application/pdf",
+                                        use_container_width=True
+                                    )
+                            else:
+                                st.error("PDF generation failed. Please check the error message above.")
                     
                     # --- Display the formatted preview ---
                     display_resume_preview(tailored_text)
