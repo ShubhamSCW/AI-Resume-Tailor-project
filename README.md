@@ -59,6 +59,20 @@ A Streamlit web application that uses Generative AI (Google Gemini or OpenAI GPT
 5.  **Generate**: Click the "✨ Generate Tailored Resume" button.
 6.  **Download & Preview**: After a moment, download links for `.docx` and `.pdf` files will appear, and a formatted preview will be displayed on the page.
 
+## 🤝 Contributing
+
+Contributions are welcome! If you have ideas for new features, improvements, or bug fixes, feel free to open an issue or submit a pull request.
+
+1.  Fork the Project
+2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4.  Push to the Branch (`git push origin feature/AmazingFeature`)
+5.  Open a Pull Request
+
+## 📜 License
+
+This project is licensed under the MIT License. See the `LICENSE` file for more information.
+
 ---
 
-
+This project is for educational and demonstrational purposes. Always review and refine the AI-generated resume to ensure it accurately represents your skills and experience.
