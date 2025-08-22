@@ -1,0 +1,5 @@
+streamlit
+python-docx
+fpdf
+google-generativeai
+openai
