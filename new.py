@@ -73,34 +73,6 @@ def format_pdf(content, file_path):
     except Exception as e:
         st.error(f"An unexpected error occurred during PDF creation: {e}")
 
-def get_keywords(text):
-    """Utility function to extract keywords from text."""
-    stopwords = set(["i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself", "yourselves", "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself", "they", "them", "their", "theirs", "themselves", "what", "which", "who", "whom", "this", "that", "these", "those", "am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "having", "do", "does", "did", "doing", "a", "an", "the", "and", "but", "if", "or", "because", "as", "until", "while", "of", "at", "by", "for", "with", "about", "against", "between", "into", "through", "during", "before", "after", "above", "below", "to", "from", "up", "down", "in", "out", "on", "off", "over", "under", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now"])
-    words = set(re.findall(r'\b\w+\b', text.lower()))
-    return words - stopwords
-
-def grade_resume(resume_text):
-    """Grades the resume based on readability, action verbs, and quantifiable metrics."""
-    readability_score = textstat.flesch_reading_ease(resume_text)
-    action_verbs = ['managed', 'led', 'developed', 'created', 'implemented', 'achieved', 'increased', 'reduced', 'improved']
-    quantifiable_metrics = len(re.findall(r'\b\d+[\%]?\b', resume_text))
-    
-    verb_count = sum(1 for verb in action_verbs if verb in resume_text.lower())
-    
-    # Grade calculation
-    grade = "C"
-    feedback = []
-    if readability_score > 60 and verb_count > 3 and quantifiable_metrics > 2:
-        grade = "A"
-        feedback.append("✅ Excellent use of action verbs and quantifiable results.")
-    elif readability_score > 50 and verb_count > 1 and quantifiable_metrics > 0:
-        grade = "B"
-        feedback.append("👍 Good start, but could be improved by adding more specific metrics and stronger action verbs.")
-    else:
-        feedback.append("⚠️ Needs improvement. Focus on using stronger action verbs and adding numbers to show your impact (e.g., 'increased sales by 15%').")
-
-    return grade, readability_score, verb_count, quantifiable_metrics, feedback
-
 # ------------------------------------------------------------------
 # AI Generation Logic
 # ------------------------------------------------------------------
@@ -130,6 +102,40 @@ def call_ai_backend(prompt, backend, api_key):
         except Exception as e:
             st.error(f"An error occurred with OpenAI GPT: {e}")
             return None
+
+def ai_grade_resume(resume_text, jd_text, backend, api_key):
+    """Uses AI to grade the resume against the job description."""
+    prompt = f"""
+    Act as an expert ATS and professional recruiter. Analyze the following resume against the provided job description.
+    Provide a detailed analysis in the following format:
+    SCORE: [A numerical score from 0 to 100 representing the match quality]
+    GRADE: [A letter grade: A, B, C, D, or F]
+    SUMMARY: [A brief, one-sentence summary of the resume's suitability]
+    STRENGTHS:
+    - [Strength 1]
+    - [Strength 2]
+    WEAKNESSES:
+    - [Weakness 1]
+    - [Weakness 2]
+
+    Job Description:\n---\n{jd_text}\n---\nOriginal Resume:\n---\n{resume_text}\n---
+    CRITICAL INSTRUCTION: Provide ONLY the analysis in the specified format. Do not add any other text or markdown.
+    """
+    analysis_text = call_ai_backend(prompt, backend, api_key)
+    if not analysis_text:
+        return {"SCORE": "N/A", "GRADE": "N/A", "SUMMARY": "Analysis failed.", "STRENGTHS": [], "WEAKNESSES": []}
+
+    # Parse the AI response
+    analysis = {}
+    try:
+        analysis["SCORE"] = int(re.search(r"SCORE: (\d+)", analysis_text).group(1))
+        analysis["GRADE"] = re.search(r"GRADE: (\w)", analysis_text).group(1)
+        analysis["SUMMARY"] = re.search(r"SUMMARY: (.*)", analysis_text).group(1)
+        analysis["STRENGTHS"] = re.search(r"STRENGTHS:\n(.*?)\nWEAKNESSES:", analysis_text, re.DOTALL).group(1).strip().split('\n')
+        analysis["WEAKNESSES"] = re.search(r"WEAKNESSES:\n(.*)", analysis_text, re.DOTALL).group(1).strip().split('\n')
+    except (AttributeError, IndexError):
+        return {"SCORE": "N/A", "GRADE": "N/A", "SUMMARY": "Could not parse AI analysis.", "STRENGTHS": [], "WEAKNESSES": []}
+    return analysis
 
 def tailor_resume(resume_text, jd_text, tone, backend, api_key):
     """Generates the tailored resume."""
@@ -163,6 +169,10 @@ def generate_cover_letter(resume_text, jd_text, user_name, backend, api_key):
 # ------------------------------------------------------------------
 
 st.set_page_config(page_title="AI Resume Suite", page_icon="🚀", layout="wide")
+
+# Initialize session state
+if 'generated_docs' not in st.session_state:
+    st.session_state.generated_docs = None
 
 st.title("🚀 AI Resume Suite")
 st.markdown("Your all-in-one tool to analyze, tailor, and generate career documents with the power of AI.")
@@ -202,71 +212,77 @@ if st.button("✨ Analyze & Generate Documents", type="primary", use_container_w
                 for page in pdf_reader.pages:
                     resume_text += page.extract_text()
 
-            resume_keywords = get_keywords(resume_text)
-            jd_keywords = get_keywords(jd_text)
+            # --- AI Generation ---
+            analysis_results = ai_grade_resume(resume_text, jd_text, backend, api_key)
+            tailored_text = tailor_resume(resume_text, jd_text, resume_tone, backend, api_key)
             
-            if not jd_keywords:
-                st.error("Could not extract keywords from the job description. Please try a different one.")
+            if tailored_text and analysis_results:
+                st.balloons()
+                st.success("✅ Documents generated successfully!")
+                # Store results in session state to persist across reruns
+                st.session_state.generated_docs = {
+                    "analysis": analysis_results,
+                    "tailored_resume": tailored_text,
+                    "jd": jd_text
+                }
+
+# --- Display Results if they exist in session state ---
+if st.session_state.generated_docs:
+    analysis = st.session_state.generated_docs["analysis"]
+    tailored_resume = st.session_state.generated_docs["tailored_resume"]
+    job_description = st.session_state.generated_docs["jd"]
+
+    tab1, tab2, tab3 = st.tabs(["📊 AI Resume Analysis", "📄 Tailored Resume", "✉️ Cover Letter Generator"])
+
+    with tab1:
+        st.header("AI-Powered Resume Analysis")
+        score = analysis.get("SCORE", 0)
+        if isinstance(score, int):
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=score,
+                title={'text': "Job Description Match Score"},
+                gauge={'axis': {'range': [None, 100]}, 'bar': {'color': "#2a9d8f"}}))
+            st.plotly_chart(fig, use_container_width=True)
+        
+        st.subheader(f"Overall Grade: {analysis.get('GRADE', 'N/A')}")
+        st.write(f"**Summary:** {analysis.get('SUMMARY', 'No summary available.')}")
+        
+        st.subheader("Strengths")
+        for s in analysis.get("STRENGTHS", []):
+            st.markdown(s)
+            
+        st.subheader("Areas for Improvement")
+        for w in analysis.get("WEAKNESSES", []):
+            st.markdown(w)
+
+    with tab2:
+        st.header("Your Tailored Resume")
+        st.text_area("Resume Content", tailored_resume, height=400)
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = os.path.join(tmpdir, "Tailored_Resume.docx")
+            pdf_path = os.path.join(tmpdir, "Tailored_Resume.pdf")
+            format_docx(tailored_resume, docx_path)
+            format_pdf(tailored_resume, pdf_path)
+
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                with open(docx_path, "rb") as f:
+                    st.download_button("Download DOCX", f, "Tailored_Resume.docx", use_container_width=True)
+            with dl_col2:
+                if os.path.exists(pdf_path):
+                    with open(pdf_path, "rb") as f:
+                        st.download_button("Download PDF", f, "Tailored_Resume.pdf", use_container_width=True)
+    
+    with tab3:
+        st.header("Generate a Cover Letter")
+        user_name = st.text_input("Your Full Name", placeholder="e.g., Alex Doe")
+        if st.button("Generate Cover Letter", use_container_width=True):
+            if not user_name:
+                st.warning("Please enter your name.")
             else:
-                matching_keywords = resume_keywords.intersection(jd_keywords)
-                score = int((len(matching_keywords) / len(jd_keywords)) * 100)
-                grade, read_score, verb_count, metrics_count, feedback = grade_resume(resume_text)
-
-                # --- AI Generation ---
-                tailored_text = tailor_resume(resume_text, jd_text, resume_tone, backend, api_key)
-                
-                if tailored_text:
-                    st.balloons()
-                    st.success("✅ Documents generated successfully!")
-
-                    # --- UI Tabs for Output ---
-                    tab1, tab2, tab3 = st.tabs(["📊 Resume Analysis", "📄 Tailored Resume", "✉️ Cover Letter Generator"])
-
-                    with tab1:
-                        st.header("Resume Analysis")
-                        fig = go.Figure(go.Indicator(
-                            mode="gauge+number",
-                            value=score,
-                            title={'text': "Job Description Match Score"},
-                            gauge={'axis': {'range': [None, 100]}, 'bar': {'color': "#2a9d8f"}}))
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        st.subheader("Resume Grade")
-                        st.metric(label="Overall Grade", value=grade)
-                        st.write(" ".join(feedback))
-                        
-                        r_col1, r_col2, r_col3 = st.columns(3)
-                        r_col1.metric("Readability Score", f"{read_score:.1f}")
-                        r_col2.metric("Action Verbs Found", verb_count)
-                        r_col3.metric("Quantifiable Metrics", metrics_count)
-
-                    with tab2:
-                        st.header("Your Tailored Resume")
-                        st.text_area("Resume Content", tailored_text, height=400)
-                        
-                        with tempfile.TemporaryDirectory() as tmpdir:
-                            docx_path = os.path.join(tmpdir, "Tailored_Resume.docx")
-                            pdf_path = os.path.join(tmpdir, "Tailored_Resume.pdf")
-                            format_docx(tailored_text, docx_path)
-                            format_pdf(tailored_text, pdf_path)
-
-                            dl_col1, dl_col2 = st.columns(2)
-                            with dl_col1:
-                                with open(docx_path, "rb") as f:
-                                    st.download_button("Download DOCX", f, "Tailored_Resume.docx", use_container_width=True)
-                            with dl_col2:
-                                if os.path.exists(pdf_path):
-                                    with open(pdf_path, "rb") as f:
-                                        st.download_button("Download PDF", f, "Tailored_Resume.pdf", use_container_width=True)
-                    
-                    with tab3:
-                        st.header("Generate a Cover Letter")
-                        user_name = st.text_input("Your Full Name", placeholder="e.g., Alex Doe")
-                        if st.button("Generate Cover Letter", use_container_width=True):
-                            if not user_name:
-                                st.warning("Please enter your name.")
-                            else:
-                                with st.spinner("Writing your cover letter..."):
-                                    cover_letter_text = generate_cover_letter(tailored_text, jd_text, user_name, backend, api_key)
-                                    if cover_letter_text:
-                                        st.text_area("Cover Letter Content", cover_letter_text, height=400)
+                with st.spinner("Writing your cover letter..."):
+                    cover_letter_text = generate_cover_letter(tailored_resume, job_description, user_name, backend, api_key)
+                    if cover_letter_text:
+                        st.text_area("Cover Letter Content", cover_letter_text, height=400)
