@@ -1,97 +1,123 @@
-# 📄 AI Resume Tailor
+# 🚀 Ultimate AI Resume Suite
 
-A Streamlit web application that uses Generative AI (Google Gemini or OpenAI GPT) to tailor your resume to a specific job description, helping you create an ATS-friendly and keyword-optimized application.
+Tired of manually customizing your resume for every single job application? This tool is your all-in-one solution to analyze, compare, and tailor your resumes against job descriptions, helping you beat the ATS bots and land your next interview.
 
-## ✨ Features
+This Streamlit application leverages multiple AI backends (including local models) to provide deep analysis, generate tailored documents, and present the results in a rich, interactive dashboard.
 
-- **AI-Powered Tailoring**: Leverages large language models to rewrite and optimize your resume.
-- **Dual Backend Support**: Choose between Google Gemini and OpenAI GPT models.
-- **Multiple File Formats**: Upload your resume as a `.txt` or `.docx` file.
-- **Downloadable Output**: Get your tailored resume in both `.docx` and `.pdf` formats.
-- **Live Preview**: Instantly see a formatted preview of your new resume within the app.
-- **User-Friendly Interface**: Simple, clean, and intuitive UI built with Streamlit.
-- **NLP Support**: Uses spaCy for natural language preprocessing (requires downloading the English model).
+
+
+---
+
+## ✨ Key Features
+
+The suite is packed with features designed to give you a competitive edge.
+
+### 🔬 Deep Analysis & Comparison
+* **Multi-Resume Comparison**: Upload multiple resumes to see which one is the best fit for a job.
+* **Comprehensive ATS Score**: Get a detailed friendliness score (0-100) with an actionable checklist to ensure your resume is parsable by applicant tracking systems.
+* **Action Verb & Metrics Analysis**: Quantifies your use of strong action verbs and measurable results to highlight your achievements.
+* **Granular AI Feedback**: Receive specific, section-by-section feedback on your resume's content and structure.
+
+### 🤖 Multi-Model AI Power
+* **Multiple Backends**: Supports major AI providers (**Google Gemini**, **OpenAI GPT**, **Anthropic Claude**) for cloud-based generation.
+* **Local Model Support**: Run analysis locally and for free using **Ollama** or **Hugging Face Transformers**.
+* **Automatic Fallback**: If the primary AI backend fails, the app automatically tries the next one in the chain to ensure you always get a result.
+
+### 📊 Rich Visualizations
+* **Interactive Charts**: Compare overall scores and keyword coverage for all uploaded resumes with clear bar charts.
+* **Quick Metrics Dashboard**: See the most important stats for your top resume at a glance.
+* **Word Clouds**: Instantly visualize the key strengths and weaknesses identified by the AI.
+
+### ✍️ Effortless Tailoring & Export
+* **AI-Powered Resume Tailoring**: Automatically rewrites your best resume to perfectly match the tone and keywords of the job description.
+* **Automatic Cover Letter Generation**: Creates a concise, professional cover letter based on your newly tailored resume.
+* **Multiple Export Formats**: Download your final resume and cover letter as `.docx`, `.pdf`, or `.txt`.
+
+---
 
 ## 🚀 Getting Started
 
-### Prerequisites
+Follow these steps to get the application running on your local machine.
 
-- Python 3.8+
-- An API key from either [Google AI Studio](https://ai.google.dev/) (for Gemini) or [OpenAI](https://platform.openai.com/account/api-keys) (for GPT).
+### Prerequisites
+* Python 3.8+
+* API keys for any cloud backends you wish to use (e.g., Gemini, OpenAI).
 
 ### Installation
+1.  **Clone the repository:**
+    ```bash
+    git clone [https://github.com/your-username/ultimate-ai-resume-suite.git](https://github.com/your-username/ultimate-ai-resume-suite.git)
+    cd ultimate-ai-resume-suite
+    ```
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/your-username/ai-resume-tailor.git
-   cd ai-resume-tailor
-````
+2.  **Create and activate a virtual environment (recommended):**
+    ```bash
+    # For macOS/Linux
+    python3 -m venv venv
+    source venv/bin/activate
 
-2. **Create and activate a virtual environment (recommended):**
+    # For Windows
+    python -m venv venv
+    .\venv\Scripts\activate
+    ```
 
-   ```bash
-   # For macOS/Linux
-   python3 -m venv venv
-   source venv/bin/activate
+3.  **Install all required dependencies:**
+    The `requirements.txt` file should include all necessary packages. Pinning versions (`pip freeze > requirements.txt`) is recommended for reproducibility.
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-   # For Windows
-   python -m venv venv
-   .\venv\Scripts\activate
-   ```
-
-3. **Install the required dependencies:**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Download the spaCy English model (needed for NLP preprocessing):**
-
-   ```bash
-   python -m spacy download en_core_web_sm
-   ```
+4.  **Download the spaCy NLP model:**
+    This is used for advanced text processing and keyword extraction.
+    ```bash
+    python -m spacy download en_core_web_sm
+    ```
 
 ### Running the Application
+1.  **Launch the app from your terminal:**
+    ```bash
+    streamlit run app_ultimate.py
+    ```
+2.  Open your web browser to the local URL provided (usually `http://localhost:8501`).
 
-1. **Run the Streamlit app from your terminal:**
+---
 
-   ```bash
-   streamlit run app.py
-   ```
-2. Open your web browser and navigate to the local URL provided by Streamlit (usually `http://localhost:8501`).
+## ⚙️ Configuration
 
-## 🛠️ Usage
+All configuration is handled in the application's sidebar.
 
-1. **Select AI Backend**: In the sidebar, choose either "Google Gemini" or "OpenAI GPT".
-2. **Enter API Key**: Paste your corresponding API key into the text input field in the sidebar.
-3. **Upload Resume**: In the main area, click "Browse files" to upload your current resume (`.txt` or `.docx`).
-4. **Paste Job Description**: Copy the job description you are applying for and paste it into the text area.
-5. **Generate**: Click the "✨ Generate Tailored Resume" button.
-6. **Download & Preview**: After a moment, download links for `.docx` and `.pdf` files will appear, and a formatted preview will be displayed on the page.
+### API Keys
+* To use cloud models like **Gemini**, **OpenAI**, or **Anthropic**, expand the "AI Configuration" section in the sidebar and paste your API key into the corresponding field.
+
+### Using Local Models
+* **Ollama**: Ensure the Ollama desktop application is **running** on your machine before starting the Streamlit app. You must also have the required model pulled (e.g., `ollama pull llama3.1`).
+* **Hugging Face**: This requires a local installation of PyTorch. If you haven't already, install it by running `pip install torch`.
+
+---
+
+## 🛠️ How to Use
+
+1.  **Configure AI**: Select your primary AI backend and enter API keys in the sidebar.
+2.  **Upload & Paste**: Drag and drop one or more resumes and paste the target job description.
+3.  **Analyze**: Hit the "✨ Analyze & Generate" button to kick off the deep analysis.
+4.  **Review Insights**: Explore the "Analysis Insights" tab to view the interactive dashboard with comparison charts, ATS scores, and keyword coverage.
+5.  **Edit & Refine**: Navigate to the "View/Edit Tailored Resume" and "View/Edit Cover Letter" tabs to edit the AI-generated content in real-time.
+6.  **Export**: Go to the "Export Documents" tab to download your polished, ATS-friendly documents.
+
+---
 
 ## 🤝 Contributing
 
-Contributions are welcome! If you have ideas for new features, improvements, or bug fixes, feel free to open an issue or submit a pull request.
+Contributions are welcome! Please feel free to open an issue or submit a pull request.
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+1.  Fork the Project
+2.  Create your Feature Branch (`git checkout -b feature/NewFeature`)
+3.  Commit your Changes (`git commit -m 'Add some NewFeature'`)
+4.  Push to the Branch (`git push origin feature/NewFeature`)
+5.  Open a Pull Request
+
+---
 
 ## 📜 License
 
-This project is licensed under the MIT License. See the `LICENSE` file for more information.
-
----
-
-This project is for educational and demonstrational purposes. Always review and refine the AI-generated resume to ensure it accurately represents your skills and experience.
-
-```
-
----
-
-⚡ I added the `python -m spacy download en_core_web_sm` step right after installing dependencies.  
-
-Do you want me to also **pin `spacy` and `textstat` in `requirements.txt`** for easier setup, or keep it lightweight and let users install manually?
-```
+This project is licensed under the MIT License. See the `LICENSE` file for details.
