@@ -77,7 +77,7 @@ Follow these steps to get the application running on your local machine.
 ### Running the Application
 1.  **Launch the app from your terminal:**
     ```bash
-    streamlit run app_ultimate.py
+    streamlit run Ai.py
     ```
 2.  Open your web browser to the local URL provided (usually `http://localhost:8501`).
 
