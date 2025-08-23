@@ -1,6 +1,6 @@
 # app_ultimate.py
 # -----------------------------------------------------------------------------------
-# Ultimate AI Resume Suite (All-In-One)
+# Ultimate AI Resume Suite (All-In-One) - v5.0 (ATS & Action Verb Analysis)
 # Features:
 # - Resume Parsing & Preprocessing
 #   * Smarter python-docx styling (bold keywords, consistent spacing)
@@ -10,16 +10,21 @@
 # - AI Enhancements
 #   * Multiple backends: Gemini, OpenAI, Anthropic, Ollama (local), HuggingFace (optional)
 #   * Automatic fallback chain if a backend fails
-#   * Strict JSON outputs for robust parsing
+#   * Strict JSON outputs with granular, section-by-section feedback
 #   * Readability (textstat) & complexity flag
+# - Advanced Analytics <<< NEW >>>
+#   * ATS (Applicant Tracking System) friendliness score and detailed checklist
+#   * Action Verb and Quantitative Metrics counter to encourage results-driven language
 # - UI/UX
-#   * Drag & drop multi-upload with preview
-#   * Multi-resume comparison
-#   * Interactive charts: keyword heatmap; word clouds for strengths/weaknesses
+#   * Drag & drop multi-upload
+#   * Multi-resume comparison with improved interactive bar charts
+#   * "Quick Metrics" dashboard for the top resume
+#   * Interactive charts: keyword coverage, overall score, word clouds
 #   * Session caching + optional SQLite persistence
 #   * Light/Dark theme toggle
+#   * Dedicated Cover Letter Tab with personalization
 # - Exporting & Customization
-#   * Exports: DOCX, PDF, TXT, JSON
+#   * On-demand in-memory exports with robust heading detection
 #   * Templates/styles (Minimalist, Modern, Creative)
 #   * Dynamic highlight of missing keywords in tailored resume
 # -----------------------------------------------------------------------------------
@@ -116,6 +121,34 @@ SECTION_PATTERNS = [
 ]
 SECTION_REGEX = re.compile("|".join(SECTION_PATTERNS), re.IGNORECASE | re.MULTILINE)
 
+BUSINESS_JARGON_STOP_WORDS = {
+    'experience', 'work', 'responsibilities', 'skills', 'company', 'team', 'project', 'role',
+    'development', 'management', 'solution', 'solutions', 'technology', 'technologies',
+    'environment', 'system', 'systems', 'tools', 'process', 'processes', 'data', 'analysis',
+    'business', 'requirements', 'design', 'implementation', 'support', '-','–',
+    'communication', 'years', 'job', 'description', 'candidate', 'ability', 'knowledge',
+    'developer', 'engineer', 'specialist', 'analyst', 'architect', 'lead', 'manager',
+    'devops', 'full', 'stack', 'software', 'data', 'scientist', 'product'
+}
+
+# <<< NEW FEATURE >>> List of strong action verbs for analysis
+ACTION_VERBS = {
+    'achieved', 'accelerated', 'administered', 'advised', 'advocated', 'analyzed', 'authored',
+    'automated', 'built', 'calculated', 'centralized', 'chaired', 'coached', 'collaborated',
+    'conceived', 'consolidated', 'constructed', 'consulted', 'converted', 'coordinated',
+    'created', 'debugged', 'decreased', 'defined', 'delivered', 'designed', 'developed',
+    'directed', 'documented', 'drove', 'eliminated', 'engineered', 'enhanced', 'established',
+    'evaluated', 'executed', 'expanded', 'facilitated', 'founded', 'generated', 'grew',
+    'guided', 'identified', 'implemented', 'improved', 'increased', 'influenced', 'initiated',
+    'innovated', 'inspired', 'integrated', 'interpreted', 'invented', 'launched', 'led',
+    'managed', 'mastered', 'mentored', 'modernized', 'motivated', 'negotiated', 'optimized',
+    'orchestrated', 'overhauled', 'owned', 'pioneered', 'planned', 'prioritized', 'produced',
+    'proposed', 'quantified', 'ran', 'rebuilt', 'reduced', 're-engineered', 'resolved',
+    'restructured', 'revamped', 'saved', 'scaled', 'shipped', 'simplified', 'solved',
+    'spearheaded', 'standardized', 'streamlined', 'strengthened', 'succeeded', 'supervised',
+    'taught', 'trained', 'transformed', 'unified', 'won', 'wrote'
+}
+
 def detect_language(text: str) -> str:
     try:
         return detect(text)
@@ -128,76 +161,45 @@ def normalize_whitespace(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-# SpaCy pipeline selection
 @st.cache_resource
 def load_spacy_model(lang_code: str = "en"):
     if not _SPACY_OK:
         return None
-    # minimal mapping; extend as necessary
-    lang_map = {
-        "en": "en_core_web_sm",
-        "es": "es_core_news_sm",
-        "fr": "fr_core_news_sm",
-        "de": "de_core_news_sm",
-        "it": "it_core_news_sm",
-        "pt": "pt_core_news_sm",
-        "xx": "xx_ent_wiki_sm"  # multilingual (if installed)
-    }
+    lang_map = {"en": "en_core_web_sm"}
     model_name = lang_map.get(lang_code, "en_core_web_sm")
     try:
         return spacy.load(model_name)
     except Exception:
-        # fallback to multilingual if available
-        try:
-            return spacy.load("xx_ent_wiki_sm")
-        except Exception:
-            return None
+        st.warning(f"spaCy model '{model_name}' not found. Please run: python -m spacy download {model_name}")
+        return None
 
-def sent_segment(text: str, lang_code: str = "en") -> List[str]:
-    text = normalize_whitespace(text)
-    if _SPACY_OK:
-        nlp = load_spacy_model(lang_code)
-        if nlp is not None:
-            try:
-                doc = nlp(text)
-                return [s.text.strip() for s in doc.sents if s.text.strip()]
-            except Exception:
-                pass
-    # fallback to NLTK
-    if _NLTK_OK:
-        try:
-            # ensure punkt
-            try:
-                nltk.data.find('tokenizers/punkt')
-            except LookupError:
-                nltk.download('punkt', quiet=True)
-            return [s.strip() for s in sent_tokenize(text) if s.strip()]
-        except Exception:
-            pass
-    # worst-case fallback
-    return [s.strip() for s in text.split("\n") if s.strip()]
+def extract_keywords_smarter(jd_text: str, top_k: int = 25) -> List[str]:
+    if not jd_text:
+        return []
 
-def tokenize_words(text: str) -> List[str]:
-    if _SPACY_OK:
-        nlp = load_spacy_model("en")
-        if nlp is not None:
-            try:
-                return [t.text for t in nlp(text)]
-            except Exception:
-                pass
-    if _NLTK_OK:
-        try:
-            try:
-                nltk.data.find('tokenizers/punkt')
-            except LookupError:
-                nltk.download('punkt', quiet=True)
-            return word_tokenize(text)
-        except Exception:
-            pass
-    return re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{1,}", text)
+    keywords = set()
+    nlp = load_spacy_model("en")
+
+    if nlp is None or not _SPACY_OK:
+        st.warning("spaCy not available, falling back to basic keyword extraction.")
+        tokens = re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{2,}", jd_text.lower())
+        return [word for word in tokens if word not in BUSINESS_JARGON_STOP_WORDS][:top_k]
+
+    doc = nlp(jd_text)
+    for token in doc:
+        if token.pos_ in ['NOUN', 'PROPN']:
+            keyword = token.text.lower().strip()
+            if len(keyword) > 1 and keyword not in BUSINESS_JARGON_STOP_WORDS:
+                keywords.add(keyword)
+
+    text_lower = jd_text.lower()
+    keyword_counts = {kw: text_lower.count(kw) for kw in keywords}
+
+    sorted_keywords = sorted(keyword_counts.items(), key=lambda item: item[1], reverse=True)
+
+    return [kw for kw, count in sorted_keywords[:top_k]]
 
 def read_file_to_text(upload) -> str:
-    """Extract text from TXT/DOCX/PDF uploads."""
     name = upload.name.lower()
     try:
         if name.endswith('.txt'):
@@ -206,67 +208,96 @@ def read_file_to_text(upload) -> str:
             doc = DocxDocument(upload)
             return "\n".join(p.text for p in doc.paragraphs)
         elif name.endswith('.pdf'):
-            text = []
-            reader = PdfReader(upload)
-            for page in reader.pages:
-                try:
-                    text.append(page.extract_text() or "")
-                except Exception:
-                    continue
+            text = [p.extract_text() or "" for p in PdfReader(upload).pages]
             return "\n".join(text)
-        else:
-            return ""
+        return ""
     except Exception:
         return ""
 
 def auto_detect_sections(text: str) -> Dict[str, List[str]]:
-    """
-    Heuristic section splitter. Returns dict of section -> lines.
-    Lines not matched go to 'Other'.
-    """
     blocks = defaultdict(list)
     current = "Other"
     for raw in text.split("\n"):
         line = raw.strip()
-        if not line:
-            continue
+        if not line: continue
         if re.match(SECTION_REGEX, line):
             current = re.sub(r'\s+', ' ', line.title())
-            blocks[current]  # ensure key present
+            blocks[current]
         else:
             blocks[current].append(line)
     return dict(blocks)
 
-def extract_keywords(jd_text: str, top_k: int = 30) -> List[str]:
-    tokens = re.findall(r"[A-Za-z][A-Za-z0-9+.#-]{1,}", jd_text)
-    tokens = [t.lower() for t in tokens if len(t) > 2]
-    counter = Counter(tokens)
-    common = [w for w, _ in counter.most_common(top_k)]
-    return common
-
 def compute_similarity(text_a: str, text_b: str) -> float:
-    vect = TfidfVectorizer(stop_words='english')
-    tfidf = vect.fit_transform([text_a, text_b])
-    return float(cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0])
+    try:
+        vect = TfidfVectorizer(stop_words='english')
+        tfidf = vect.fit_transform([text_a, text_b])
+        return float(cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0])
+    except ValueError:
+        return 0.0
 
 def keyword_coverage(resume_text: str, jd_keywords: List[str]) -> Dict[str, int]:
     res_lc = resume_text.lower()
     return {k: int(k in res_lc) for k in jd_keywords}
 
 def generate_wordcloud(words: List[str], title: str = ""):
-    text = " ".join(words) if words else ""
-    wc = WordCloud(width=800, height=400, background_color=None, mode="RGBA")
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.imshow(wc.generate(text), interpolation="bilinear")
+    text = " ".join(words) if words else "no_data"
+    wc = WordCloud(width=800, height=400, background_color="rgba(255, 255, 255, 0)", mode="RGBA", colormap='viridis').generate(text)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.imshow(wc, interpolation="bilinear")
     ax.axis("off")
     if title:
-        ax.set_title(title)
-    st.pyplot(fig, clear_figure=True)
+        ax.set_title(title, fontsize=16)
+    st.pyplot(fig, use_container_width=True)
 
+# <<< NEW FEATURE >>> Function to analyze ATS friendliness
+def analyze_ats_friendliness(text: str) -> Dict[str, Any]:
+    checks = {}
+    score = 100
+    
+    # Check 1: Contact Info
+    has_email = bool(re.search(r'[\w\.-]+@[\w\.-]+', text))
+    has_phone = bool(re.search(r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', text))
+    if has_email and has_phone:
+        checks["✅ Contact Info"] = "Email and phone number found."
+    else:
+        checks["❌ Contact Info"] = "Missing email or phone number in a standard format."
+        score -= 20
 
-# ==============================================
-# LLM Backends (strict JSON where needed)
-# ==============================================
+    # Check 2: Standard Sections
+    found_sections = [s for s in ['experience', 'education', 'skills'] if re.search(f'^{s}', text, re.IGNORECASE | re.MULTILINE)]
+    if len(found_sections) >= 3:
+        checks["✅ Standard Sections"] = "Found essential sections (Experience, Education, Skills)."
+    else:
+        checks["❌ Standard Sections"] = "Missing one or more standard sections like 'Experience', 'Education', or 'Skills'."
+        score -= 25
+
+    # Check 3: Word Count
+    word_count = len(text.split())
+    if 400 <= word_count <= 800:
+        checks["✅ Word Count"] = f"Good word count ({word_count}). Fits on 1-2 pages."
+    else:
+        checks["⚠️ Word Count"] = f"Word count is {word_count}. Aim for 400-800 words for most roles."
+        score -= 10
+    
+    # Check 4: Parsable Format (heuristic)
+    non_alpha_ratio = len(re.findall(r'[^a-zA-Z0-9\s]', text)) / len(text) if len(text) > 0 else 0
+    if non_alpha_ratio < 0.05:
+        checks["✅ Simple Formatting"] = "Appears to use standard characters, good for parsing."
+    else:
+        checks["⚠️ Simple Formatting"] = "High ratio of special characters detected. Avoid tables, columns, or graphics."
+        score -= 15
+
+    return {"score": max(0, score), "checks": checks}
+
+# <<< NEW FEATURE >>> Function to count action verbs and metrics
+def analyze_action_verbs_and_metrics(text: str) -> Dict[str, int]:
+    words = set(re.findall(r'\b\w+\b', text.lower()))
+    action_verb_count = len([v for v in words if v in ACTION_VERBS])
+    
+    # Regex to find numbers, percentages, dollar amounts
+    metric_count = len(re.findall(r'\b\d+(\.\d+)?%?\b|\$\d+', text))
+    
+    return {"action_verbs": action_verb_count, "quantitative_metrics": metric_count}
 
 def safe_json_extract(text: str) -> Dict[str, Any]:
     if not text:
@@ -305,66 +336,38 @@ def call_anthropic_json(prompt: str, api_key: str) -> Dict[str, Any]:
     client = anthropic.Anthropic(api_key=api_key)
     msg = client.messages.create(
         model="claude-3-haiku-20240307",
-        max_tokens=2000,
+        max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
         system="Return ONLY valid JSON."
     )
-    # Anthropics returns list of content blocks
-    text = ""
-    try:
-        for blk in msg.content:
-            if blk.type == "text":
-                text += blk.text
-    except Exception:
-        text = str(msg)
+    text = "".join([blk.text for blk in msg.content if blk.type == "text"])
     return safe_json_extract(text)
 
 def call_ollama_json(prompt: str) -> Dict[str, Any]:
-    # Requires Ollama running locally: https://github.com/ollama/ollama
-    # e.g., model "llama3.1"
     url = "http://localhost:11434/api/chat"
-    data = {
-        "model": "llama3.1",
-        "messages": [{"role": "system", "content": "Return ONLY valid JSON."},
-                     {"role": "user", "content": prompt}],
-        "stream": False
-    }
+    data = {"model": "llama3.1", "messages": [{"role": "system", "content": "Return ONLY valid JSON."}, {"role": "user", "content": prompt}], "stream": False}
     r = requests.post(url, json=data, timeout=120)
     r.raise_for_status()
-    out = r.json()
-    content = out.get("message", {}).get("content", "")
+    content = r.json().get("message", {}).get("content", "")
     return safe_json_extract(content)
 
 def call_huggingface_json(prompt: str) -> Dict[str, Any]:
-    if not _HF_OK:
-        raise RuntimeError("transformers not installed.")
-    gen = pipeline("text-generation", model="gpt2")  # placeholder small model
+    if not _HF_OK: raise RuntimeError("transformers not installed.")
+    gen = pipeline("text-generation", model="gpt2")
     text = gen(prompt, max_length=512, num_return_sequences=1)[0]["generated_text"]
     return safe_json_extract(text)
 
 def call_llm_json(prompt: str, primary: str, keys: Dict[str, str]) -> Dict[str, Any]:
-    """
-    primary: one of ["Google Gemini", "OpenAI GPT", "Anthropic Claude", "Ollama (local)", "HuggingFace (local)"]
-    keys: {"gemini": "...", "openai": "...", "anthropic": "..."} (as available)
-    Fallback order tries others automatically.
-    """
     backends = ["Google Gemini", "OpenAI GPT", "Anthropic Claude", "Ollama (local)", "HuggingFace (local)"]
-    # rotate so primary is first
     order = [primary] + [b for b in backends if b != primary]
-
     last_err = None
     for b in order:
         try:
-            if b == "Google Gemini" and keys.get("gemini"):
-                return call_gemini_json(prompt, keys["gemini"])
-            if b == "OpenAI GPT" and keys.get("openai"):
-                return call_openai_json(prompt, keys["openai"])
-            if b == "Anthropic Claude" and keys.get("anthropic"):
-                return call_anthropic_json(prompt, keys["anthropic"])
-            if b == "Ollama (local)":
-                return call_ollama_json(prompt)
-            if b == "HuggingFace (local)":
-                return call_huggingface_json(prompt)
+            if b == "Google Gemini" and keys.get("gemini"): return call_gemini_json(prompt, keys["gemini"])
+            if b == "OpenAI GPT" and keys.get("openai"): return call_openai_json(prompt, keys["openai"])
+            if b == "Anthropic Claude" and keys.get("anthropic"): return call_anthropic_json(prompt, keys["anthropic"])
+            if b == "Ollama (local)": return call_ollama_json(prompt)
+            if b == "HuggingFace (local)": return call_huggingface_json(prompt)
         except Exception as e:
             last_err = e
             st.warning(f"{b} failed: {e}")
@@ -373,10 +376,6 @@ def call_llm_json(prompt: str, primary: str, keys: Dict[str, str]) -> Dict[str, 
     return {}
 
 def call_llm_text(prompt: str, primary: str, keys: Dict[str, str]) -> str:
-    """Text (non-JSON). Uses same fallback chain."""
-    json_prompt = f"Return ONLY plain text.\n\n{prompt}"
-    # Reuse JSON callers but read raw string when possible
-    # Simpler: use OpenAI/Gemini first; else Ollama
     order = [primary] + [b for b in ["Google Gemini", "OpenAI GPT", "Anthropic Claude", "Ollama (local)", "HuggingFace (local)"] if b != primary]
     for b in order:
         try:
@@ -386,24 +385,12 @@ def call_llm_text(prompt: str, primary: str, keys: Dict[str, str]) -> str:
                 return (model.generate_content(prompt).text or "").strip()
             if b == "OpenAI GPT" and keys.get("openai"):
                 client = OpenAI(api_key=keys["openai"])
-                r = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2
-                )
+                r = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.2)
                 return r.choices[0].message.content.strip()
             if b == "Anthropic Claude" and keys.get("anthropic") and _ANTHROPIC_OK:
                 client = anthropic.Anthropic(api_key=keys["anthropic"])
-                msg = client.messages.create(
-                    model="claude-3-haiku-20240307",
-                    max_tokens=1500,
-                    messages=[{"role":"user","content":prompt}]
-                )
-                text = ""
-                for blk in msg.content:
-                    if getattr(blk, "type", "") == "text":
-                        text += blk.text
-                return text.strip()
+                msg = client.messages.create(model="claude-3-haiku-20240307", max_tokens=1500, messages=[{"role":"user","content":prompt}])
+                return "".join([blk.text for blk in msg.content if getattr(blk, "type", "") == "text"]).strip()
             if b == "Ollama (local)":
                 url = "http://localhost:11434/api/chat"
                 data = {"model": "llama3.1", "messages":[{"role":"user","content":prompt}], "stream": False}
@@ -418,7 +405,6 @@ def call_llm_text(prompt: str, primary: str, keys: Dict[str, str]) -> str:
             continue
     return ""
 
-
 # ==============================================
 # Formatting & Export
 # ==============================================
@@ -426,136 +412,89 @@ def call_llm_text(prompt: str, primary: str, keys: Dict[str, str]) -> str:
 def style_docx_paragraph(run, bold=False, size=11, color=None):
     run.bold = bold
     run.font.size = Pt(size)
-    if color is not None:
-        run.font.color.rgb = color
+    if color: run.font.color.rgb = color
 
-def format_docx(content: str, file_path: str, template: str = "Minimalist", keywords_to_bold: Optional[List[str]] = None):
-    """
-    - Bold headings (ALL CAPS short lines)
-    - Bullet for lines starting with -, •, *
-    - Bold given keywords dynamically
-    - Templates: Minimalist, Modern, Creative
-    """
+def format_docx_content(content: str, template: str = "Minimalist", keywords_to_bold: Optional[List[str]] = None):
     try:
         doc = DocxDocument()
         normal = doc.styles['Normal']
         normal.font.name = "Calibri" if template == "Minimalist" else ("Helvetica" if template == "Modern" else "Georgia")
         normal.font.size = Pt(11)
-
         accent = RGBColor(0x00, 0x33, 0x66) if template in ("Modern", "Creative") else None
-
-        def add_header(text):
-            p = doc.add_paragraph()
-            run = p.add_run(text)
-            style_docx_paragraph(run, bold=True, size=13, color=accent)
-            p.paragraph_format.space_before = Pt(12)
-            p.paragraph_format.space_after = Pt(6)
 
         kws = [k.lower() for k in (keywords_to_bold or [])]
 
         for raw in content.split("\n"):
             line = raw.strip()
-            if not line:
-                continue
-            if line.isupper() and len(line.split()) < 6:
-                add_header(line)
+            if not line: continue
+
+            if re.match(SECTION_REGEX, line) or (line.isupper() and len(line.split()) < 6):
+                p = doc.add_paragraph()
+                style_docx_paragraph(p.add_run(line), bold=True, size=13, color=accent)
+                p.paragraph_format.space_before = Pt(12)
+                p.paragraph_format.space_after = Pt(6)
             elif line.startswith(("-", "•", "*")):
                 p = doc.add_paragraph(style="List Bullet")
                 text = line[1:].strip()
-                # keyword bolding within bullet
-                if kws:
-                    pos = 0
-                    lower = text.lower()
-                    # simple span highlighting by splitting on keywords
-                    tokens = re.split(r'(\W+)', text)  # keep punctuation
-                    for tok in tokens:
-                        if tok.lower() in kws:
-                            style_docx_paragraph(p.add_run(tok), bold=True)
-                        else:
-                            p.add_run(tok)
-                else:
-                    p.add_run(text)
+                tokens = re.split(r'(\W+)', text)
+                for tok in tokens:
+                    if kws and tok.lower() in kws:
+                        style_docx_paragraph(p.add_run(tok), bold=True)
+                    else:
+                        p.add_run(tok)
             else:
                 p = doc.add_paragraph()
-                if kws:
-                    tokens = re.split(r'(\W+)', line)
-                    for tok in tokens:
-                        if tok.lower() in kws:
-                            style_docx_paragraph(p.add_run(tok), bold=True)
-                        else:
-                            p.add_run(tok)
-                else:
-                    p.add_run(line)
-        doc.save(file_path)
-    except Exception as e:
-        st.error(f"DOCX export error: {e}")
+                tokens = re.split(r'(\W+)', line)
+                for tok in tokens:
+                    if kws and tok.lower() in kws:
+                        style_docx_paragraph(p.add_run(tok), bold=True)
+                    else:
+                        p.add_run(tok)
 
-def format_pdf(content: str, file_path: str):
+        bio = io.BytesIO()
+        doc.save(bio)
+        bio.seek(0)
+        return bio
+    except Exception as e:
+        st.error(f"Error creating DOCX file: {e}")
+        return None
+
+def format_pdf_content(content: str):
     try:
-        doc = SimpleDocTemplate(
-            file_path, pagesize=letter, rightMargin=inch, leftMargin=inch, topMargin=inch, bottomMargin=inch
-        )
+        bio = io.BytesIO()
+        doc = SimpleDocTemplate(bio, pagesize=letter, rightMargin=inch, leftMargin=inch, topMargin=inch, bottomMargin=inch)
         story = []
         styles = getSampleStyleSheet()
-        styles.add(ParagraphStyle(name='Header', fontName='Helvetica-Bold', fontSize=12,
-                                  spaceBefore=12, spaceAfter=6, textColor=HexColor('#003366')))
+        styles.add(ParagraphStyle(name='Header', fontName='Helvetica-Bold', fontSize=12, spaceBefore=12, spaceAfter=6, textColor=HexColor('#003366')))
         styles.add(ParagraphStyle(name='CustomBullet', parent=styles['Normal'], leftIndent=20, firstLineIndent=0, spaceBefore=2))
 
         for raw in content.split("\n"):
             line = raw.strip()
-            if not line:
-                continue
-            if line.isupper() and len(line.split()) < 6:
+            if not line: continue
+
+            if re.match(SECTION_REGEX, line) or (line.isupper() and len(line.split()) < 6):
                 p = Paragraph(line, styles['Header'])
             elif line.startswith(("-", "•", "*")):
-                bullet_text = f"<bullet>&bull;</bullet>{line[1:].strip()}"
-                p = Paragraph(bullet_text, styles['CustomBullet'])
+                p = Paragraph(f"<bullet>&bull;</bullet>{line[1:].strip()}", styles['CustomBullet'])
             else:
                 p = Paragraph(line, styles['Normal'])
             story.append(p)
         doc.build(story)
+        bio.seek(0)
+        return bio
     except Exception as e:
-        st.error(f"PDF export error: {e}")
-
-def export_txt(content: str, file_path: str):
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    return file_path
-
-def export_json(data: Dict[str, Any], file_path: str):
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    return file_path
+        st.error(f"Error creating PDF file: {e}")
+        return None
 
 def highlight_missing_keywords_html(text: str, missing: List[str]) -> str:
-    if not missing:
-        return f"<div>{text}</div>"
-    def repl(match):
-        token = match.group(0)
-        if token.lower() in missing:
-            return f'<span style="background-color:#ffe4e1;border-radius:3px;padding:1px 2px">{token}</span>'
-        return token
-    pattern = r"[A-Za-z][A-Za-z0-9+.#-]{1,}"
-    return re.sub(pattern, repl, text, flags=re.IGNORECASE)
-
-
-# ==============================================
-# Optional persistence (SQLite)
-# ==============================================
+    if not missing: return f"<div>{text}</div>"
+    repl = lambda m: f'<span style="background-color:#ffe4e1;border-radius:3px;padding:1px 2px">{m.group(0)}</span>' if m.group(0).lower() in missing else m.group(0)
+    return re.sub(r"[A-Za-z][A-Za-z0-9+.#-]{1,}", repl, text, flags=re.IGNORECASE)
 
 @st.cache_resource
 def get_db(path="resume_suite.db"):
     conn = sqlite3.connect(path, check_same_thread=False)
-    conn.execute("""
-    CREATE TABLE IF NOT EXISTS analyses(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts INTEGER,
-      backend TEXT,
-      score INTEGER,
-      grade TEXT,
-      payload TEXT
-    )
-    """)
+    conn.execute("CREATE TABLE IF NOT EXISTS analyses(id INTEGER PRIMARY KEY, ts, backend, score, grade, payload TEXT)")
     return conn
 
 def persist_analysis(conn, backend: str, score: int, grade: str, payload: Dict[str, Any]):
@@ -563,296 +502,243 @@ def persist_analysis(conn, backend: str, score: int, grade: str, payload: Dict[s
                  (int(time.time()), backend, score, grade, json.dumps(payload)))
     conn.commit()
 
-
 # ==============================================
 # Streamlit App
 # ==============================================
 
 st.set_page_config(page_title="Ultimate AI Resume Suite", page_icon="🚀", layout="wide")
 
-# Theme toggle (basic CSS)
-theme = st.sidebar.toggle("🌙 Dark mode", value=False)
-if theme:
-    st.markdown("""
-        <style>
-        .stApp { background: #0e1117; color: #e0e0e0; }
-        .stMarkdown, .stText, .stCaption { color: #e0e0e0 !important; }
-        </style>
-    """, unsafe_allow_html=True)
+if 'theme' not in st.session_state:
+    st.session_state.theme = False
+
+is_dark = st.sidebar.toggle("🌙 Dark mode", value=st.session_state.theme, key="theme_toggle")
+if is_dark:
+    st.markdown("""<style> .stApp { background: #0e1117; color: #e0e0e0; } </style>""", unsafe_allow_html=True)
 
 st.title("🚀 Ultimate AI Resume Suite")
 st.caption("Analyze, compare, tailor, and export ATS-friendly resumes with multi-model AI and rich visuals.")
 
-# AI Config
-st.sidebar.header("⚙️ AI Configuration")
-primary_backend = st.sidebar.selectbox(
-    "Primary Backend",
-    ["Google Gemini", "OpenAI GPT", "Anthropic Claude", "Ollama (local)", "HuggingFace (local)"],
-    index=0
-)
-gemini_key = st.sidebar.text_input("Gemini API Key", type="password", help="google-generativeai")
-openai_key = st.sidebar.text_input("OpenAI API Key", type="password", help="openai")
-anthropic_key = st.sidebar.text_input("Anthropic API Key", type="password", help="anthropic (optional)")
-
+with st.sidebar.expander("⚙️ AI Configuration", expanded=True):
+    primary_backend = st.selectbox("Primary Backend", ["Google Gemini", "OpenAI GPT", "Anthropic Claude", "Ollama (local)", "HuggingFace (local)"])
+    gemini_key = st.text_input("Gemini API Key", type="password")
+    openai_key = st.text_input("OpenAI API Key", type="password")
+    anthropic_key = st.text_input("Anthropic API Key", type="password")
 keys = {"gemini": gemini_key, "openai": openai_key, "anthropic": anthropic_key}
 
+with st.sidebar.expander("🎨 Output Options"):
+    candidate_name = st.text_input("Your Full Name", placeholder="e.g., Jane Doe") # <<< NEW FEATURE >>>
+    resume_tone = st.selectbox("Resume Tone", ["Professional", "Creative", "Technical", "Enthusiastic"])
+    docx_template = st.selectbox("DOCX Template", ["Minimalist", "Modern", "Creative"])
+    persist_to_sqlite = st.checkbox("Persist analyses to SQLite")
 
-st.sidebar.header("🎨 Output Options")
-resume_tone = st.sidebar.selectbox("Resume Tone", ["Professional", "Creative", "Technical", "Enthusiastic"])
-docx_template = st.sidebar.selectbox("DOCX Template", ["Minimalist", "Modern", "Creative"])
-persist_to_sqlite = st.sidebar.checkbox("Persist analyses to SQLite", value=False)
-
-# Upload + JD
-st.subheader("1) Upload one or more resumes & paste the job description")
+st.subheader("1) Upload Resumes & Paste the Job Description")
 c1, c2 = st.columns([1, 1])
 with c1:
-    resumes = st.file_uploader("Drag & drop resumes here (Multi-upload OK)", type=["txt", "docx", "pdf"], accept_multiple_files=True)
+    resumes = st.file_uploader("Drag & drop resumes here", type=["txt", "docx", "pdf"], accept_multiple_files=True)
 with c2:
     jd_text = st.text_area("Paste Job Description", height=220, placeholder="Paste JD here...")
-
-# Language detection & preview
-if resumes:
-    st.markdown("#### Quick Preview")
-    pv_cols = st.columns(min(3, len(resumes)))
-    for i, f in enumerate(resumes[:3]):
-        with pv_cols[i]:
-            rt = read_file_to_text(f)
-            lang = detect_language(rt[:1000]) if rt else "unknown"
-            st.caption(f"**{f.name}** (lang: {lang})")
-            st.text_area("Preview", value=(rt[:400] + ("…" if len(rt) > 400 else "")), height=150, key=f"pv_{i}")
 
 if st.button("✨ Analyze & Generate", type="primary", use_container_width=True):
     if not resumes or not jd_text:
         st.warning("Please upload at least one resume and paste the JD.")
         st.stop()
 
-    # Prepare JD keywords (multilingual agnostic simple approach)
-    jd_keywords = extract_keywords(jd_text, top_k=25)
+    with st.spinner("Performing deep analysis and generating documents..."):
+        jd_keywords = extract_keywords_smarter(jd_text, top_k=25)
 
-    # Analyze all resumes
-    all_results = []
-    for rf in resumes:
-        text = read_file_to_text(rf)
-        text_norm = normalize_whitespace(text)
-        sim = compute_similarity(text_norm, jd_text)
-        coverage = keyword_coverage(text_norm, jd_keywords)
+        all_results = []
+        for rf in resumes:
+            text = read_file_to_text(rf)
+            if not text:
+                st.warning(f"Could not read content from {rf.name}. Skipping.")
+                continue
+            text_norm = normalize_whitespace(text)
+            sim = compute_similarity(text_norm, jd_text)
+            coverage = keyword_coverage(text_norm, jd_keywords)
+            ats_analysis = analyze_ats_friendliness(text_norm) # <<< NEW FEATURE >>>
+            verb_metric_analysis = analyze_action_verbs_and_metrics(text_norm) # <<< NEW FEATURE >>>
 
-        # JSON grading via LLM (with fallback chain)
-        grading_prompt = f"""
-Return STRICT JSON with keys EXACTLY:
-"SCORE" (integer 0-100),
-"GRADE" (one of "A","B","C","D","F"),
-"SUMMARY" (string),
-"STRENGTHS" (array of strings),
-"WEAKNESSES" (array of strings).
+            # <<< MODIFIED >>> Improved AI prompt for more granular feedback
+            grading_prompt = f"""
+            Analyze the following resume against the job description. Return STRICT JSON with the following keys:
+            - "SCORE": An integer score from 0 to 100 representing the overall match.
+            - "GRADE": A letter grade from "A+" to "F".
+            - "SUMMARY": A one-sentence summary of the candidate's fit.
+            - "SECTION_FEEDBACK": A dictionary where keys are resume section titles (e.g., "Summary", "Experience", "Skills") and values are 1-2 bullet points of feedback for that section.
 
-Evaluate the resume vs the job description from an ATS + recruiter perspective.
-Be precise and use content present.
+            Job Description (first 1000 chars): "{jd_text[:1000]}"
+            Resume (first 1000 chars): "{text_norm[:1000]}"
+            """
+            result = call_llm_json(grading_prompt, primary_backend, keys) or {}
+            score = int(result.get("SCORE", round(sim * 100)))
+            grade = result.get("GRADE", "?")
 
-Job Description:
----
-{jd_text}
----
+            all_results.append({
+                "name": rf.name, "text": text_norm, "score": score, "grade": grade,
+                "summary": result.get("SUMMARY", ""),
+                "section_feedback": result.get("SECTION_FEEDBACK", {}),
+                "coverage": coverage,
+                "ats": ats_analysis,
+                "verbs_metrics": verb_metric_analysis
+            })
 
-Resume:
----
-{text_norm}
----
-"""
-        result = call_llm_json(grading_prompt, primary_backend, keys) or {}
-        score = int(result.get("SCORE", round(sim * 100)))
-        grade = result.get("GRADE", "?")
-        strengths = result.get("STRENGTHS", [])
-        weaknesses = result.get("WEAKNESSES", [])
-        summary = result.get("SUMMARY", "")
+        if not all_results:
+            st.error("Analysis failed for all resumes.")
+            st.stop()
 
-        if persist_to_sqlite:
-            try:
-                conn = get_db()
-                persist_analysis(conn, primary_backend, score, grade, {
-                    "name": rf.name,
-                    "summary": summary,
-                    "strengths": strengths,
-                    "weaknesses": weaknesses,
-                    "coverage": coverage
-                })
-            except Exception as e:
-                st.warning(f"SQLite persist failed: {e}")
+        all_results.sort(key=lambda x: x["score"], reverse=True)
+        st.session_state['analysis_results'] = all_results
+        st.session_state['jd_keywords'] = jd_keywords
+        st.session_state['jd_text'] = jd_text
+        
+        best_resume = all_results[0]
+        tail_prompt = f"You are a professional resume writer. Return ONLY plain text. Rewrite and tailor this resume: '{best_resume['text']}' to perfectly match the job description: '{jd_text}' using a '{resume_tone}' tone. Ensure ATS-friendly formatting, action-driven bullets, and write ALL SECTION HEADINGS (like 'Experience', 'Skills') IN ALL CAPS."
+        st.session_state['tailored_resume'] = call_llm_text(tail_prompt, primary_backend, keys)
+        
+        default_name = candidate_name or "the applicant"
+        cover_prompt = f"Return ONLY plain text. Write a concise 3-4 paragraph cover letter for '{default_name}', based on this tailored resume: '{st.session_state['tailored_resume']}' and this job description: '{jd_text}'. Highlight 2-3 matching qualifications and end with a call to action."
+        st.session_state['cover_letter'] = call_llm_text(cover_prompt, primary_backend, keys)
 
-        all_results.append({
-            "name": rf.name,
-            "text": text_norm,
-            "score": score,
-            "grade": grade,
-            "summary": summary,
-            "strengths": strengths,
-            "weaknesses": weaknesses,
-            "coverage": coverage
-        })
+if 'analysis_results' in st.session_state:
+    all_results = st.session_state['analysis_results']
+    jd_keywords = st.session_state['jd_keywords']
+    jd_text = st.session_state['jd_text']
+    best_resume = all_results[0]
 
-    # Rank by score
-    all_results.sort(key=lambda x: x["score"], reverse=True)
+    st.success("Analysis and document generation complete!")
+    
+    tab_insights, tab_resume, tab_cover_letter, tab_export = st.tabs([
+        "📊 Analysis Insights", 
+        "✍️ View/Edit Tailored Resume", 
+        "📄 View/Edit Cover Letter", 
+        "💾 Export Documents"
+    ])
 
-    st.success("Analysis complete.")
-    tabA, tabB, tabC = st.tabs(["📊 Comparison & Insights", "✍️ Tailoring & Highlights", "💾 Export"])
+    with tab_insights:
+        # <<< NEW FEATURE >>> Quick Metrics Dashboard
+        st.subheader(f"🏆 Quick Metrics for Top Resume: {best_resume['name']}")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Overall Score", f"{best_resume['score']}/100", delta=best_resume['grade'])
+        m2.metric("ATS Score", f"{best_resume['ats']['score']}/100")
+        m3.metric("Action Verbs", best_resume['verbs_metrics']['action_verbs'])
+        m4.metric("Quant. Metrics", best_resume['verbs_metrics']['quantitative_metrics'])
+        st.divider()
 
-    # -------- TAB A: charts --------
-    with tabA:
-        # Heatmap: resume vs keywords
-        st.subheader("Keyword Coverage Heatmap")
-        heat_df = pd.DataFrame(
-            [{**r["coverage"], "Resume": r["name"]} for r in all_results]
-        ).set_index("Resume")
-        fig_heat = px.imshow(
-            heat_df.values,
-            labels=dict(x="Keyword", y="Resume", color="Present"),
-            x=list(heat_df.columns),
-            y=list(heat_df.index),
-            aspect="auto",
-            title="JD Keyword Presence (1=present, 0=absent)"
-        )
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.subheader("Overall Match Score Comparison")
+        score_df = pd.DataFrame(all_results).sort_values("score", ascending=True)
+        fig_score = px.bar(score_df, x='score', y='name', orientation='h', title='Overall Match Score (Higher is Better)', labels={'score': 'Match Score (0-100)', 'name': 'Resume'}, text='score')
+        fig_score.update_traces(texttemplate='%{text:.0f}', textposition='outside')
+        fig_score.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_score, use_container_width=True)
 
-        # Gauge for top resume
-        best = all_results[0]
-        st.subheader(f"Top Match: {best['name']}")
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=best["score"],
-            title={'text': "Match Score"},
-            gauge={'axis': {'range': [None, 100]}}
-        ))
-        st.plotly_chart(fig, use_container_width=True)
+        st.subheader("Keyword Coverage Score")
+        for r in all_results:
+            total_kws = len(jd_keywords)
+            found_kws = sum(r['coverage'].values())
+            r['coverage_percent'] = (found_kws / total_kws) * 100 if total_kws > 0 else 0
+        coverage_df = pd.DataFrame(all_results).sort_values("coverage_percent", ascending=True)
+        fig_coverage = px.bar(coverage_df, x='coverage_percent', y='name', orientation='h', title='Job Description Keyword Coverage', labels={'coverage_percent': 'Coverage (%)', 'name': 'Resume'}, text='coverage_percent')
+        fig_coverage.update_traces(texttemplate='%{text:.0f}%', textposition='outside')
+        fig_coverage.update_layout(xaxis_range=[0,105], yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_coverage, use_container_width=True)
 
-        # Word clouds
-        col_wc1, col_wc2 = st.columns(2)
-        with col_wc1:
-            st.markdown("**Strengths Word Cloud**")
-            generate_wordcloud([w for r in all_results for w in r["strengths"]], title="Strengths")
-        with col_wc2:
-            st.markdown("**Weaknesses Word Cloud**")
-            generate_wordcloud([w for r in all_results for w in r["weaknesses"]], title="Weaknesses")
-
-        # Detail expanders
         st.subheader("Per-Resume Details")
         for r in all_results:
-            with st.expander(f"{r['name']} — Score {r['score']} / Grade {r['grade']}"):
-                st.write("**Summary:**", r["summary"])
-                st.write("**Strengths:**")
-                for s in r["strengths"]:
-                    st.markdown(f"- {s}")
-                st.write("**Weaknesses:**")
-                for w in r["weaknesses"]:
-                    st.markdown(f"- {w}")
-                st.caption(f"Readability (Flesch Reading Ease): {textstat.flesch_reading_ease(r['text']):.1f}")
+            with st.expander(f"**{r['name']}** — Score: **{r['score']}** / Grade: **{r['grade']}**"):
+                st.markdown(f"**AI Summary:** {r['summary']}")
+                
+                # <<< MODIFIED >>> Display granular section feedback
+                if r['section_feedback']:
+                    st.markdown("**AI Section-by-Section Feedback:**")
+                    for section, feedback in r['section_feedback'].items():
+                        st.markdown(f"- **{section}:** {' '.join(feedback) if isinstance(feedback, list) else feedback}")
+                
+                # <<< NEW FEATURE >>> Display detailed ATS and Verb/Metric analysis
+                st.markdown(f"---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown(f"**ATS Friendliness: {r['ats']['score']}/100**")
+                    for check, message in r['ats']['checks'].items():
+                        st.markdown(f"<small>{check}: {message}</small>", unsafe_allow_html=True)
+                with col2:
+                    st.markdown("**Content Analysis:**")
+                    st.markdown(f"- **Action Verbs Found:** {r['verbs_metrics']['action_verbs']}")
+                    st.markdown(f"- **Quantitative Metrics Found:** {r['verbs_metrics']['quantitative_metrics']}")
+                    st.markdown(f"- **Readability (Flesch):** {textstat.flesch_reading_ease(r['text']):.1f}")
+                
 
-    # -------- TAB B: tailoring --------
-    with tabB:
-        st.subheader("Tailored Resume & Highlighting")
-        best = all_results[0]
-        tail_prompt = f"""
-You are a senior resume writer. Return ONLY plain text.
-Rewrite and tailor this resume to perfectly match the job description using a '{resume_tone}' tone.
-Keep ATS-friendly formatting with standard sections and action/results-driven bullets.
-Integrate relevant JD keywords naturally.
+    with tab_resume:
+        st.subheader("View & Edit Your AI-Tailored Resume")
+        st.info("The AI has rewritten your best resume to better match the job description. You can edit the text here before exporting.")
+        
+        tailored_resume_text = st.text_area(
+            "AI-Tailored Resume", 
+            value=st.session_state.get('tailored_resume', ""), 
+            height=500, 
+            key="tailed_text_area"
+        )
+        
+        if tailored_resume_text:
+            missing = sorted([k for k in jd_keywords if k not in tailored_resume_text.lower()])
+            st.markdown("**Missing JD Keywords:**")
+            st.info(", ".join(missing) if missing else "None Found! 🎉")
+    
+    with tab_cover_letter:
+        st.subheader("View & Edit Your AI-Generated Cover Letter")
+        st.info("The AI has written a cover letter based on your tailored resume. You can edit it here before exporting.")
+        
+        st.text_area(
+            "AI-Generated Cover Letter", 
+            value=st.session_state.get('cover_letter', ""), 
+            height=500, 
+            key="cover_letter_text_area"
+        )
 
-Job Description:
----
-{jd_text}
----
-
-Original Resume:
----
-{best['text']}
----
-"""
-        tailored_resume = call_llm_text(tail_prompt, primary_backend, keys)
-        st.markdown("**Tailored Resume (raw text)**")
-        st.text_area("Tailored Resume", value=tailored_resume, height=350, key="tailed")
-
-        # Missing keywords highlight (show what JD has but tailored resume still misses)
-        tr_lc = (tailored_resume or "").lower()
-        missing = sorted([k for k in jd_keywords if k not in tr_lc])
-        st.markdown("**Missing JD Keywords in Tailored Resume:** " + (", ".join(missing) if missing else "None 🎉"))
-        html_highlight = highlight_missing_keywords_html(tailored_resume or "", missing)
-        st.markdown("**Highlighted (inline):**", unsafe_allow_html=False)
-        st.markdown(f"<div style='padding:10px;border:1px solid #ddd;border-radius:8px'>{html_highlight}</div>", unsafe_allow_html=True)
-
-        # Optional: AI-structured sectioning (assist)
-        st.markdown("---")
-        st.markdown("**Auto-structured Sections (heuristic)**")
-        sections = auto_detect_sections(tailored_resume or "")
-        for sec, lines in sections.items():
-            st.markdown(f"**{sec}**")
-            for ln in lines[:8]:
-                st.markdown(f"- {ln}")
-            if len(lines) > 8:
-                st.caption(f"... and {len(lines)-8} more")
-
-        # Cover letter
-        st.markdown("---")
-        st.subheader("Cover Letter")
-        user_name = st.text_input("Your Name for Cover Letter", value="")
-        if st.button("Generate Cover Letter"):
-            cover_prompt = f"""
-Return ONLY plain text. Write a concise 3-4 paragraph cover letter for '{user_name or "Candidate"}',
-based on the tailored resume and job description. Highlight 2-3 matching qualifications and end with a call to action.
-
-Job Description:
----
-{jd_text}
----
-
-Tailored Resume:
----
-{tailored_resume}
----
-"""
-            cover_letter = call_llm_text(cover_prompt, primary_backend, keys)
-            st.text_area("Cover Letter", value=cover_letter, height=300, key="cover_letter")
-
-    # -------- TAB C: export --------
-    with tabC:
+    with tab_export:
         st.subheader("Export Center")
-        exp_cols = st.columns(4)
-        tailored_text = st.session_state.get("tailed", tailored_resume if 'tailored_resume' in locals() else "")
-        cover_text = st.session_state.get("cover_letter", "")
+        st.info("Download your generated documents in various formats.")
+        
+        tailored_text_export = st.session_state.get("tailed_text_area", "")
+        cover_text_export = st.session_state.get("cover_letter_text_area", "")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### Tailored Resume")
+            if tailored_text_export:
+                try:
+                    docx_data = format_docx_content(tailored_text_export, docx_template, jd_keywords)
+                    if docx_data:
+                        st.download_button("⬇️ DOCX", data=docx_data, file_name="Tailored_Resume.docx", key="docx_res")
+                except Exception as e:
+                    st.error(f"DOCX Error: {e}")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Exports for Tailored Resume
-            tr_docx = os.path.join(tmpdir, "Tailored_Resume.docx")
-            tr_pdf  = os.path.join(tmpdir, "Tailored_Resume.pdf")
-            tr_txt  = os.path.join(tmpdir, "Tailored_Resume.txt")
-            tr_json = os.path.join(tmpdir, "Tailored_Resume.json")
+                try:
+                    pdf_data = format_pdf_content(tailored_text_export)
+                    if pdf_data:
+                        st.download_button("⬇️ PDF", data=pdf_data, file_name="Tailored_Resume.pdf", key="pdf_res")
+                except Exception as e:
+                    st.error(f"PDF Error: {e}")
 
-            format_docx(tailored_text, tr_docx, template=docx_template, keywords_to_bold=jd_keywords)
-            format_pdf(tailored_text, tr_pdf)
-            export_txt(tailored_text, tr_txt)
-            export_json({"tailored_resume": tailored_text, "jd_keywords": jd_keywords}, tr_json)
+                st.download_button("⬇️ TXT", data=tailored_text_export, file_name="Tailored_Resume.txt", key="txt_res")
+            else:
+                st.warning("No tailored resume available to export.")
+        with c2:
+            st.markdown("#### Cover Letter")
+            if cover_text_export:
+                try:
+                    docx_data_cl = format_docx_content(cover_text_export, docx_template)
+                    if docx_data_cl:
+                        st.download_button("⬇️ DOCX", data=docx_data_cl, file_name="Cover_Letter.docx", key="docx_cl")
+                except Exception as e:
+                    st.error(f"DOCX Error: {e}")
 
-            # Exports for Cover Letter (if exists)
-            cl_docx = os.path.join(tmpdir, "Cover_Letter.docx")
-            cl_pdf  = os.path.join(tmpdir, "Cover_Letter.pdf")
-            cl_txt  = os.path.join(tmpdir, "Cover_Letter.txt")
-            cl_json = os.path.join(tmpdir, "Cover_Letter.json")
+                try:
+                    pdf_data_cl = format_pdf_content(cover_text_export)
+                    if pdf_data_cl:
+                        st.download_button("⬇️ PDF", data=pdf_data_cl, file_name="Cover_Letter.pdf", key="pdf_cl")
+                except Exception as e:
+                    st.error(f"PDF Error: {e}")
 
-            if cover_text:
-                format_docx(cover_text, cl_docx, template=docx_template)
-                format_pdf(cover_text, cl_pdf)
-                export_txt(cover_text, cl_txt)
-                export_json({"cover_letter": cover_text}, cl_json)
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button("⬇️ Tailored Resume (DOCX)", data=open(tr_docx, "rb"), file_name="Tailored_Resume.docx")
-                st.download_button("⬇️ Tailored Resume (PDF)",  data=open(tr_pdf, "rb"),  file_name="Tailored_Resume.pdf")
-                st.download_button("⬇️ Tailored Resume (TXT)",  data=open(tr_txt, "rb"),  file_name="Tailored_Resume.txt")
-                st.download_button("⬇️ Tailored Resume (JSON)", data=open(tr_json, "rb"), file_name="Tailored_Resume.json")
-            with c2:
-                if cover_text:
-                    st.download_button("⬇️ Cover Letter (DOCX)", data=open(cl_docx, "rb"), file_name="Cover_Letter.docx")
-                    st.download_button("⬇️ Cover Letter (PDF)",  data=open(cl_pdf, "rb"),  file_name="Cover_Letter.pdf")
-                    st.download_button("⬇️ Cover Letter (TXT)",  data=open(cl_txt, "rb"),  file_name="Cover_Letter.txt")
-                    st.download_button("⬇️ Cover Letter (JSON)", data=open(cl_json, "rb"), file_name="Cover_Letter.json")
-                else:
-                    st.info("Generate a cover letter in Tab B to enable cover-letter exports.")
+                st.download_button("⬇️ TXT", data=cover_text_export, file_name="Cover_Letter.txt", key="txt_cl")
+            else:
+                st.warning("No cover letter available to export.")
