@@ -41,6 +41,7 @@ Follow these steps to get the application running on your local machine.
 
 ### Prerequisites
 * Python 3.8+
+* -   An API key from either [Google AI Studio](https://ai.google.dev/) (for Gemini) or [OpenAI](https://platform.openai.com/account/api-keys) (for GPT).
 * API keys for any cloud backends you wish to use (e.g., Gemini, OpenAI).
 
 ### Installation
