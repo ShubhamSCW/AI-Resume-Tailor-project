@@ -1,6 +1,3 @@
-Perfect 👍 Here’s the **updated `README.md` file** with `spaCy` installation included:
-
-````markdown
 # 📄 AI Resume Tailor
 
 A Streamlit web application that uses Generative AI (Google Gemini or OpenAI GPT) to tailor your resume to a specific job description, helping you create an ATS-friendly and keyword-optimized application.
