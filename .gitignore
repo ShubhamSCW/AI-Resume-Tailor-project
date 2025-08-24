@@ -1,1 +1,4 @@
 venv/
+resume_suite.db
+__pycache__/
+
