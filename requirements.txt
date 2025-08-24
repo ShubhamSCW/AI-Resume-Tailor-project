@@ -1,18 +1,17 @@
+# ================================
+# requirements.txt
+# ================================
 streamlit
 python-docx
 PyPDF2
-reportlab
-plotly
 pandas
+plotly
 scikit-learn
 textstat
-langdetect
 spacy
-nltk
-wordcloud
-matplotlib
 google-generativeai
-openai
+openai>=1.0.0
 anthropic
 requests
-transformers
+Jinja2
+playwright
