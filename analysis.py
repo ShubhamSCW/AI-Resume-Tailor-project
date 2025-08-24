@@ -1,7 +1,3 @@
-# ================================
-# analysis.py
-# ================================
-
 import json
 import re
 import html

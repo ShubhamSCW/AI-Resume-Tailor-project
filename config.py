@@ -1,8 +1,4 @@
-# ================================
-# config.py
-# ================================
-
-APP_VERSION = "15.0 (Stable & Robust)"
+APP_VERSION = "v1.0"
 
 # LLM Model Names
 GEMINI_MODEL = "gemini-1.5-flash"

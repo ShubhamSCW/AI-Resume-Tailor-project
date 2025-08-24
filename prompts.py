@@ -1,6 +1,3 @@
-# ================================
-# prompts.py
-# ================================
 
 def get_job_field_prompt(jd_text: str) -> str:
     """Generates a prompt to identify the job field from a job description."""

@@ -1,6 +1,3 @@
-# ================================
-# requirements.txt
-# ================================
 streamlit
 python-docx
 PyPDF2
