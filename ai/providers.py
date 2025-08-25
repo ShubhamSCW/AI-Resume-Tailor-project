@@ -1,8 +1,9 @@
 # ai/providers.py — Multi-provider abstraction (per-request keys, auto temperature)
 from typing import Optional, Dict, List
+import re
 import requests
 import google.generativeai as genai
-from google.api_core import client_options as client_options_lib # Import for timeout
+from google.api_core import client_options as client_options_lib
 from openai import OpenAI
 try:
     import anthropic
@@ -14,6 +15,15 @@ JSON_HINT = "Return ONLY valid JSON."
 
 class AIResponseError(Exception):
     pass
+
+def _strip_fences(s: str) -> str:
+    if not s:
+        return ""
+    # Remove common markdown fences and surrounding whitespace
+    s = s.strip()
+    s = re.sub(r"^```(?:json|txt)?\s*", "", s)
+    s = re.sub(r"\s*```$", "", s)
+    return s.strip()
 
 class ProviderBase:
     name: str
@@ -29,23 +39,19 @@ class GeminiProvider(ProviderBase):
     def generate_text(self, prompt: str, json_mode: bool, keys: Dict[str, Optional[str]]) -> str:
         api_key = (keys or {}).get("gemini")
         if not api_key: raise AIResponseError("Gemini key missing.")
-        
-        # FIXED: Added a 60-second timeout to prevent long hangs on network issues.
         genai.configure(
             api_key=api_key,
             transport="rest",
-            client_options=client_options_lib.ClientOptions(
-                api_endpoint="generativelanguage.googleapis.com",
-            )
+            client_options=client_options_lib.ClientOptions(api_endpoint="generativelanguage.googleapis.com"),
         )
-        
         model = genai.GenerativeModel(self.model_name)
         p = f"{JSON_HINT}\n{prompt}" if json_mode else prompt
-        
-        request_options = {"timeout": 60}
-        out = model.generate_content(p, generation_config={"temperature": self.temperature}, request_options=request_options)
-        
-        return out.text or ""
+        out = model.generate_content(
+            p,
+            generation_config={"temperature": self.temperature},
+            request_options={"timeout": 60}
+        )
+        return _strip_fences(out.text or "")
 
 # -------- OpenAI --------
 class OpenAIProvider(ProviderBase):
@@ -55,16 +61,17 @@ class OpenAIProvider(ProviderBase):
     def generate_text(self, prompt: str, json_mode: bool, keys: Dict[str, Optional[str]]) -> str:
         api_key = (keys or {}).get("openai")
         if not api_key: raise AIResponseError("OpenAI key missing.")
-        # FIXED: Added a 60-second timeout.
         client = OpenAI(api_key=api_key, timeout=60.0)
         messages = [{"role": "user", "content": prompt}]
-        if json_mode: messages.insert(0, {"role": "system", "content": JSON_HINT})
+        if json_mode:
+            messages.insert(0, {"role": "system", "content": JSON_HINT})
         resp = client.chat.completions.create(
-            model=self.model_name, messages=messages,
+            model=self.model_name,
+            messages=messages,
             temperature=self.temperature,
             response_format={"type": "json_object"} if json_mode else {"type": "text"},
         )
-        return resp.choices[0].message.content or ""
+        return _strip_fences(resp.choices[0].message.content or "")
 
 # -------- Anthropic --------
 class ClaudeProvider(ProviderBase):
@@ -75,15 +82,17 @@ class ClaudeProvider(ProviderBase):
     def generate_text(self, prompt: str, json_mode: bool, keys: Dict[str, Optional[str]]) -> str:
         api_key = (keys or {}).get("anthropic")
         if not api_key: raise AIResponseError("Anthropic key missing.")
-        # FIXED: Added a 60-second timeout.
         client = anthropic.Anthropic(api_key=api_key, timeout=60.0)
         system = JSON_HINT if json_mode else ""
         msg = client.messages.create(
-            model=self.model_name, max_tokens=4096, system=system,
+            model=self.model_name,
+            max_tokens=4096,
+            system=system,
             messages=[{"role": "user", "content": prompt}],
             temperature=self.temperature
         )
-        return "".join(b.text for b in msg.content if hasattr(b, "text"))
+        text = "".join(b.text for b in msg.content if hasattr(b, "text"))
+        return _strip_fences(text)
 
 # -------- Ollama (local) --------
 class OllamaProvider(ProviderBase):
@@ -100,7 +109,8 @@ class OllamaProvider(ProviderBase):
             timeout=120
         )
         r.raise_for_status()
-        return r.json().get("message", {}).get("content", "")
+        content = r.json().get("message", {}).get("content", "")
+        return _strip_fences(content)
 
 # -------- Manager with fallback --------
 class ProviderManager:
@@ -115,17 +125,13 @@ class ProviderManager:
         raise AIResponseError(f"Unknown provider {name}")
     def generate(self, prompt: str, json_mode: bool, keys: Dict[str, Optional[str]], order: Optional[List[str]] = None) -> str:
         last_err = None
-        if isinstance(prompt, dict):
-            prompt = prompt.get("raw_text", "")
-        else:
-            prompt = str(prompt or "")
+        prompt = prompt.get("raw_text", "") if isinstance(prompt, dict) else str(prompt or "")
         for name in (order or self.order):
             try:
                 prov = self._instantiate(name)
-                return prov.generate_text(prompt, json_mode=json_mode, keys=keys)
+                out = prov.generate_text(prompt, json_mode=json_mode, keys=keys)
+                return out.strip()
             except Exception as e:
                 last_err = e
-                # Optional: Add a print statement here to see which provider is failing
-                # print(f"Provider '{name}' failed with error: {e}")
                 continue
         raise AIResponseError(f"All providers failed. Last error: {last_err}")

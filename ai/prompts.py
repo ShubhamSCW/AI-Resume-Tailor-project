@@ -5,18 +5,19 @@ def _join_list(lst):
         return ""
     return ", ".join([str(x) for x in lst])
 
-# --------- JD Analysis (Unchanged but still important) ---------
+# --------- JD Analysis (tightened extraction rules) ---------
 def jd_analysis_prompt(jd_text: str) -> str:
     return f"""
-You are an expert recruitment analyst. Your task is to analyze the provided Job Description (JD) and return a structured JSON object.
+You are an expert recruitment analyst. Analyze the Job Description (JD) and return a compact JSON object.
 
 Rules for Keyword Extraction:
-- **Focus on hard skills**: Identify specific technologies (e.g., Python, React, AWS), software (e.g., Salesforce, Jira), tools, methodologies (e.g., Agile, Scrum), and tangible qualifications (e.g., CPA, PMP).
-- **Create concise phrases**: Combine words into meaningful technical terms (e.g., "RESTful APIs", "data modeling").
-- **Exclude generic terms**: Do NOT include soft skills (e.g., "communication") or common business jargon (e.g., "responsibilities").
-- **Rank by importance**: The most critical keywords should appear first.
+- Focus on HARD SKILLS only: technologies, frameworks, libraries, tools, platforms, certifications, data stores, protocols, methodologies.
+- Normalize to canonical short phrases (1–3 words): e.g., "REST APIs", "data modeling", "ETL", "Kubernetes".
+- Merge variants and avoid duplicates: e.g., "PostgreSQL" vs "Postgres" → "PostgreSQL".
+- Exclude soft skills and generic words entirely.
+- Rank by hiring impact (most critical first).
 
-Return a JSON object with this schema:
+Return ONLY this JSON schema:
 {{
   "job_title": "Inferred job title",
   "keywords": ["Top keyword 1", "Top keyword 2", ...]
@@ -26,70 +27,64 @@ Job Description:
 ---
 {jd_text}
 ---
-Ensure your output is ONLY the valid JSON object.
 """.strip()
 
-# --------- Advanced Resume Synthesis (NEW MASTER PROMPT) ---------
+# --------- Advanced Resume Synthesis (stricter fact guard) ---------
 def generative_synthesis_prompt(jd_text: str, resume_text: str, job_field: str, keywords: list) -> str:
-    """
-    This is the core generative prompt. It adopts a persona and synthesizes a new resume.
-    """
     kw_str = _join_list(keywords)
     return f"""
-You are a world-class professional resume writer and an expert career coach specializing in the '{job_field}' field.
-Your mission is to synthesize a brand-new, elite-tier resume for your client based on their original resume and the target job description.
+You are a world-class professional resume writer and career coach for '{job_field}' roles.
+Synthesize a new, elite-tier resume based on the ORIGINAL resume facts and the target JD.
 
-**Core Directives:**
-1.  **Synthesize, Don't Just Edit:** You will write a new resume from the ground up. Use the "Original Resume" only as a database of facts (jobs, skills, metrics, dates). Do not be constrained by its original phrasing, order, or structure.
-2.  **Fact-Based Generation:** You MUST NOT invent or hallucinate facts. Every skill, project, job, date, and metric in the new resume must be derived directly from the "Original Resume".
-3.  **JD-First Alignment:** The new resume's narrative, from the professional summary to the bullet points, must be laser-focused on the requirements and keywords in the "Job Description". Use the provided keyword list to ensure full alignment.
-4.  **Quantify Everything:** Rephrase experience bullet points to lead with strong action verbs and focus on measurable, quantified outcomes (e.g., "Reduced latency by 30%," "Increased user engagement by 15%," "Managed a budget of $500K"). Follow the STAR (Situation, Task, Action, Result) method.
-5.  **Professional Structure:** The output must be a complete resume in plain text. It MUST begin with the candidate's contact information, followed by standard, ATS-friendly section headers in ALL CAPS. The required structure is:
-    - **Candidate Name** (as the very first line)
-    - **Email | Phone | LinkedIn URL | Extra Link** (as the second line, separated by '|')
-    - **PROFILE SUMMARY**
-    - **CORE SKILLS**
-    - **WORK EXPERIENCE**
-    - **EDUCATION**
-    - **CERTIFICATIONS** (if any)
+NON-NEGOTIABLE RULES (read carefully):
+- FACT-ONLY: Do NOT invent or add any skill, project, employer, title, date, or metric that is NOT clearly present in the Original Resume. No speculation, no guessing.
+- REPHRASE-ONLY: You may rewrite phrasing for clarity, impact, and quantification — but every bullet must be traceable to existing facts in the Original Resume.
+- JD-FIRST EMPHASIS: Prioritize relevance to the JD and the keyword list. Prefer facts that align with the JD, reorder content accordingly.
+- QUANTIFY: Where numbers exist in the Original Resume, surface them early using action verbs and STAR style.
+- STRUCTURE (exactly):
+  Candidate Name
+  Email | Phone | LinkedIn URL | Extra Link
+  PROFILE SUMMARY
+  CORE SKILLS
+  WORK EXPERIENCE
+  EDUCATION
+  CERTIFICATIONS
 
-**Inputs:**
+If a JD keyword is not present in the Original Resume, DO NOT add it; instead emphasize adjacent, truthful capabilities already present.
+
+Inputs:
 ---
-**Target Job Description:**
+Target Job Description:
 {jd_text}
 ---
-**Key Keywords to Emphasize:**
+Key Keywords to Emphasize:
 {kw_str}
 ---
-**Original Resume (Fact Source):**
+Original Resume (Fact Source Only — do not add new facts):
 {resume_text}
 ---
 
-Produce the complete, synthesized, and tailored resume as clean, plain text, strictly following the structure defined above. Do not include any commentary before or after the resume.
+Output: A complete, ATS-friendly resume in plain text using the exact section order above. No commentary before or after.
 """.strip()
 
-# --------- Cover Letter (Enhanced for Synthesis) ---------
+# --------- Cover Letter (unchanged, concise) ---------
 def cover_letter_prompt(jd_text: str, tailored_resume_text: str, job_field: str) -> str:
     return f"""
-Act as a professional career writer. Write a concise, compelling, and professional 200-word cover letter for the '{job_field}' role.
-Use the provided tailored resume and job description to highlight 2-3 key achievements that directly match the company's needs.
-The letter should be structured in three short paragraphs:
-1.  Introduction: State the role you're applying for and your enthusiasm.
-2.  Body: Connect your key achievements (with metrics) to the job requirements.
-3.  Closing: Reiterate your interest and call to action.
+Act as a professional career writer. Write a concise, compelling 200-word cover letter for the '{job_field}' role.
+Use the tailored resume and JD to highlight 2–3 achievements with metrics that match the role.
+Structure: 1) intro, 2) matching achievements, 3) close with call to action.
 
-**Job Description:**
+Job Description:
 ---
 {jd_text}
 ---
-**Candidate's Tailored Resume:**
+Candidate's Tailored Resume:
 ---
 {tailored_resume_text}
 ---
-Return ONLY the final letter text, with no extra commentary.
+Return ONLY the final letter text.
 """.strip()
 
-# --------- Other Prompts (Unchanged) ---------
 def interview_prep_prompt(jd_text: str, resume_text: str) -> str:
     return f"""
 Create a concise interview prep guide (MARKDOWN):
@@ -97,7 +92,7 @@ Create a concise interview prep guide (MARKDOWN):
 2) Top 3 Behavioral Questions (1 line each)
 3) Key Talking Points (5 bullets based on resume)
 4) 2 Insightful Questions for the Interviewer (1 line each)
-Focus on the exact alignment between the JD and the resume.
+Align tightly to the JD and resume.
 
 JD:
 ---
@@ -112,12 +107,12 @@ RESUME:
 def skills_gap_prompt(jd_text: str, resume_text: str) -> str:
     return f"""
 Compare the JD and Resume to identify skill gaps for the candidate.
-Return a JSON object with the schema:
+Return ONLY this JSON:
 {{
-  "critical_gaps": ["List of essential skills the candidate is missing"],
-  "nice_to_have": ["List of secondary skills the candidate is missing"],
+  "critical_gaps": ["Essential skills missing from the resume"],
+  "nice_to_have": ["Secondary skills missing"],
   "learning_path": [
-    {{ "topic": "Skill to learn", "resources": ["A book, course, or project idea"], "expected_outcome": "A measurable goal" }}
+    {{ "topic": "Skill to learn", "resources": ["A book, course, or project idea"], "expected_outcome": "Measurable goal" }}
   ]
 }}
 JD:
@@ -128,5 +123,4 @@ RESUME:
 ---
 {resume_text}
 ---
-Only return JSON, no commentary.
 """.strip()

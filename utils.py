@@ -108,10 +108,10 @@ def file_to_json(upload) -> Dict[str, Any]:
                     pages_text.append(p.extract_text() or "")
             except Exception:
                 pass
-            # 2) pdfminer.six
+            # 2) pdfminer.six (correct module path)
             if not any(pages_text) or len("".join(pages_text).strip()) < 40:
                 try:
-                    from pdfminer_high_level import extract_text as pdfminer_extract  # type: ignore
+                    from pdfminer.high_level import extract_text as pdfminer_extract  # <- fixed path
                 except Exception:
                     pdfminer_extract = None
                 if pdfminer_extract:
@@ -168,7 +168,7 @@ def guess_name_from_header(text: str) -> str:
     if not text:
         return ""
     
-    # FIXED: Increased search limit from 12 to 20 lines for more flexibility.
+    # Increased search limit from 12 to 20 lines for more flexibility.
     lines = [_clean_line(x) for x in text.splitlines() if _clean_line(x)]
     search_lines = lines[:20] 
 
@@ -184,11 +184,10 @@ def guess_name_from_header(text: str) -> str:
         if 2 <= len(tokens) <= 4 and all(t[0].isupper() for t in tokens if t and t[0].isalpha()):
             return ln
             
-    # spaCy fallback (optional, but powerful)
+    # spaCy fallback (optional)
     try:
         import spacy
         nlp = spacy.load("en_core_web_sm")
-        # FIXED: Analyze the same expanded search area.
         doc = nlp("\n".join(search_lines))
         for ent in doc.ents:
             if ent.label_ == "PERSON" and 2 <= len(ent.text.split()) <= 4:
@@ -218,18 +217,17 @@ def extract_contact_info(text_or_json: Any) -> Dict[str, str]:
     txt = txt.replace("\u200b", "").replace("\xa0", " ")
     lines = [_clean_line(x) for x in txt.splitlines() if _clean_line(x)]
     
-    # FIXED: The primary issue was searching only in a small "header_block".
-    # Now we search the *entire* resume text for contact details.
-    
     # Email
     email = ""
     m = re.search(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", txt, re.I)
     if m: email = m.group(0)
     
-    # Phone
+    # Phone (more inclusive for intl dialing codes, bounded by digits length)
     phone = ""
-    # This regex is broad to catch many formats like (123) 456-7890, +1 123 456 7890, etc.
-    m = re.search(r'(\(?\d{3}\)?[\s.-]?)?\d{3}[\s.-]?\d{4}', txt)
+    m = re.search(
+        r'(?:(?:\+?\d{1,3}[\s\-\.]?)?(?:\(?\d{2,4}\)?[\s\-\.]?)?)\d{3,4}[\s\-\.]?\d{4}',
+        txt
+    )
     if m:
         ph = m.group(0)
         digits = re.sub(r"\D","", ph)
@@ -240,21 +238,18 @@ def extract_contact_info(text_or_json: Any) -> Dict[str, str]:
     linkedin = ""
     m = re.search(r"linkedin\.com/(in|pub)/[A-Za-z0-9\-_/%]+", txt, re.I)
     if m: 
-        # Prepend https for cleaner data
         linkedin = "https://www.linkedin.com/" + m.group(0).split("linkedin.com/", 1)[-1]
         
-    # Location guess (still reasonable to limit this to the top of the resume)
+    # Location guess (simple heuristic near top)
     location = ""
     for ln in lines[:30]:
         low = ln.lower()
-        # A simple check for common city/country names
         if any(w in low for w in [
             "india","usa","united states","canada","uk","uae","germany","australia",
             "noida","gurgaon","gurugram","bangalore","bengaluru","mumbai","pune",
             "hyderabad","delhi","chennai","kolkata","remote","hybrid","london","new york",
             "san francisco", "toronto", "dubai", "berlin", "sydney"
         ]):
-            # Avoid grabbing a line that is actually a linkedin URL
             if "linkedin.com" not in low:
                 location = ln
                 break
@@ -366,7 +361,7 @@ def _execute_llm_call(prompt: str, primary: str, keys: Dict[str, str], expect_js
     return "{}" if expect_json else ""
 
 def call_llm_json(prompt: str, primary: str, keys: Dict[str, str]) -> Dict[str, Any]:
-    raw_response = _execute_llm_call(prompt, "Google Gemini", keys, expect_json=True)
+    raw_response = _execute_llm_call(prompt, "Google Gemini", keys={k:v for k,v in (keys or {}).items() if v}, expect_json=True)
     try:
         return json.loads(raw_response)
     except Exception:
@@ -487,7 +482,7 @@ def _normalize_for_guard_lines(ls: List[str]) -> List[str]:
         s = s.strip()
         s = _WS_RUN.sub(" ", s)
         out.append(s)
-    # collapse >=3 blank lines to 2 (line-level handled later)
+    # collapse >=3 blank lines to 2
     return out
 
 def _verbatim_guard_strict(original_lines: List[str], rendered_lines: List[str]) -> None:

@@ -2,7 +2,9 @@
 from typing import Dict, List
 
 def choose_order(keys: Dict[str, str], strategy: str = "Best quality") -> List[str]:
-    have = {k for k,v in keys.items() if v and k in {"openai","gemini","anthropic","ollama_base"}}
+    # Guard against None and whitespace-only keys
+    keys = keys or {}
+    have = {k for k, v in keys.items() if (v or "").strip() and k in {"openai", "gemini", "anthropic", "ollama_base"}}
     
     # Strategy presets
     if strategy == "Best quality":
@@ -12,7 +14,7 @@ def choose_order(keys: Dict[str, str], strategy: str = "Best quality") -> List[s
     else:  # Local first
         pref = ["ollama", "gemini", "openai", "anthropic"]
         
-    out = []
+    out: List[str] = []
     for p in pref:
         if p == "ollama":
             if "ollama_base" in have:
@@ -21,7 +23,7 @@ def choose_order(keys: Dict[str, str], strategy: str = "Best quality") -> List[s
             if p in have:
                 out.append(p)
                 
-    # Fallback if user provided nothing, to avoid crashing
+    # Fallback if nothing provided, avoid crash
     if not out:
         out = ["gemini", "openai", "anthropic", "ollama"]
         
