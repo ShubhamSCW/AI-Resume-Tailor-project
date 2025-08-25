@@ -1,142 +1,219 @@
-import os
-import time
-import pandas as pd
-import plotly.graph_objects as go
+# app.py — Fixed state management for contact detail inputs.
+from typing import Dict
 import streamlit as st
-
-from analysis import perform_full_analysis, call_llm_text, generate_ats_preview
-from config import APP_VERSION
+from ai.providers import ProviderManager
+from ai.selector import choose_order
+from pipeline import ProResumePipeline
 from utils import (
-    clean_linkedin_jd, get_history, init_db, log_analysis,
-    format_docx_stable, format_pdf_stable, read_file_to_text
+    file_to_json, extract_contact_info,
+    format_pdf_preserve, format_docx_preserve,
+    init_db, get_history, log_analysis,
 )
 
-# --- App Setup ---
-st.set_page_config(page_title="AI Resume Suite", page_icon="🚀", layout="wide")
-init_db()
-st.title(f"🚀 Ultimate AI Resume Suite (v{APP_VERSION})")
+st.set_page_config(page_title="ProResumeAI — Expert Synthesis", page_icon="✨", layout="wide")
 
-# --- Session State ---
-for key, default in [("analysis_run", False), ("analysis_data", {}), ("jd_input", "")]:
-    if key not in st.session_state: st.session_state[key] = default
+# ---------- Theme ----------
+CSS = """
+<style>
+:root{--bg:#f9fafb;--panel:#ffffff;--ink:#111827;--muted:#6b7280;--accent:#2563eb;--accent2:#9333ea;--border:#e5e7eb;--radius:12px;--shadow:0 2px 10px rgba(0,0,0,0.06);--font:'Inter','Segoe UI',system-ui,-apple-system,Arial,sans-serif}
+html,body,[data-testid="stApp"]{background:var(--bg)!important;color:var(--ink);font-family:var(--font)}
+.block-container{padding-top:1rem;padding-bottom:3rem}
+.card{border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;background:var(--panel);box-shadow:var(--shadow)}
+.small{color:var(--muted);font-size:13px}
+.stButton>button,.stDownloadButton>button{border:none;border-radius:var(--radius);background:linear-gradient(90deg,var(--accent),var(--accent2));color:#fff;font-weight:600;padding:.6rem 1.1rem;box-shadow:var(--shadow)}
+.stButton>button:hover,.stDownloadButton>button:hover{filter:brightness(1.05)}
+textarea,.stTextInput input{background:#fff!important;border:1px solid var(--border)!important;color:#111827!important;border-radius:10px!important}
+hr{border:none;height:1px;background:linear-gradient(90deg,transparent,#e5e7eb,transparent)}
+</style>
+"""
+st.markdown(CSS, unsafe_allow_html=True)
+st.markdown(
+    '<div class="card">'
+    '<h2 style="margin:0">✨ ProResumeAI — Expert Synthesis Engine</h2>'
+    '<div class="small">AI-driven resume generation with persona-based expertise.</div>'
+    '</div>', unsafe_allow_html=True
+)
 
-# --- Helper Functions ---
-def create_radar_chart(data: dict):
-    categories = ['Match Score', 'ATS Score', 'STAR Score', 'Readability']
-    readability_map = {'Good': 100, 'Simple': 75, 'Complex': 50, 'N/A': 0, "Error": 0}
-    scores = [data.get('score', 0), data.get('ats', {}).get('score', 0), data.get('star_score', 0), readability_map.get(data.get('readability', {}).get('rating'), 0)]
-    fig = go.Figure(data=go.Scatterpolar(r=scores, theta=categories, fill='toself', line=dict(color='#6272a4')))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 100]), bgcolor="#282a36"), showlegend=False, paper_bgcolor="#0E1117", font_color="#FAFAFA")
-    return fig
-
-# --- Sidebar ---
+# ---------- Sidebar ----------
 with st.sidebar:
-    st.header("Configuration")
-    with st.expander("⚙️ AI & API Settings", expanded=True):
-        primary_backend = st.selectbox("Primary AI Backend", ["Google Gemini", "OpenAI GPT", "Anthropic Claude", "Ollama (local)"])
-        keys = {"gemini": st.text_input("Gemini API Key", type="password"), "openai": st.text_input("OpenAI API Key", type="password"), "anthropic": st.text_input("Anthropic API Key", type="password")}
-    st.header("📚 Analysis History")
-    for r in get_history(): st.caption(f"{r['timestamp'][:16]} · Score {r['match_score']} · {r['resume_name']}")
-
-# --- Main Interface ---
-c1, c2 = st.columns(2)
-with c1: resumes = st.file_uploader("1. Upload Your Resume(s)", type=["txt", "docx", "pdf"], accept_multiple_files=True)
-with c2:
-    st.text_area("2. Paste the Job Description", height=245, key="jd_input")
-    if st.button("🧹 Clean JD", use_container_width=True) and st.session_state.jd_input:
-        st.session_state.jd_input = clean_linkedin_jd(st.session_state.jd_input)
-
-# --- Main Workflow ---
-if st.button("✨ Analyze & Tailor Resumes", type="primary", use_container_width=True):
-    if not (resumes and st.session_state.jd_input): st.warning("Please upload a resume and paste a job description.")
-    else:
-        st.session_state.analysis_data, st.session_state.resumes_list = {}, resumes
-        for rf in resumes:
-            text = read_file_to_text(rf)
-            if text: st.session_state.analysis_data[rf.name] = perform_full_analysis(text, st.session_state.jd_input, primary_backend, keys)
-        if st.session_state.analysis_data: st.session_state.analysis_run = True; st.rerun()
-        else: st.error("Could not process any uploaded resumes.")
-
-# --- Results Dashboard ---
-if st.session_state.analysis_run and st.session_state.analysis_data:
+    st.header("🔑 API Keys")
+    keys: Dict[str, str] = {
+        "openai": st.text_input("OpenAI API Key", type="password"),
+        "gemini": st.text_input("Google Gemini API Key", type="password"),
+        "anthropic": st.text_input("Anthropic API Key", type="password"),
+        "ollama_base": st.text_input("Ollama Base (optional)", value=""),
+        "ollama_model": st.text_input("Ollama Model (optional)", value=""),
+    }
+    st.caption("Keys are sent with each request and are not stored.")
     st.markdown("---")
-    st.subheader("Results Dashboard")
+    st.header("⚙️ AI Settings")
+    strategy = st.selectbox("AI Model Strategy", ["Best quality", "Fastest", "Local first"])
+    creativity = st.slider("Creativity", 0.0, 1.0, 0.25, 0.05)
+    enforce_bullets = st.checkbox("Enforce concise metrics bullets", True)
+    st.markdown("---")
+    st.header("🗃️ Recent History")
+    init_db()
+    for r in get_history():
+        st.caption(f"{r['timestamp'][:16]} · Score {r['match_score']} · {r['resume_name']}")
+
+order = choose_order(keys, strategy=strategy)
+providers = ProviderManager(order=order, temperature=creativity)
+pipe = ProResumePipeline(providers, enforce_bullets=enforce_bullets)
+
+# ---------- Session State Management ----------
+defaults = {
+    "result": None,
+    "jd_text": "",
+    "resume_text": "",
+    "user_name": "",
+    "user_email": "",
+    "user_phone": "",
+    "user_linkedin": "",
+    "user_extra": "",
+    "processed_jd_name": None,
+    "processed_resume_name": None,
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ---------- Inputs ----------
+c1, c2 = st.columns(2)
+with c1:
+    st.subheader("📄 Job Description")
+    jd_file = st.file_uploader("Upload JD", type=["txt", "pdf", "docx"], key="jd_file")
     
-    sorted_resumes = sorted(st.session_state.analysis_data.items(), key=lambda item: item[1]["basic"]["score"], reverse=True)
-    selected_name_full = st.selectbox("Select a resume:", [name for name, data in sorted_resumes])
-    data = st.session_state.analysis_data[selected_name_full]
-    
-    # FIXED: Remove original extension from filename to prevent .pdf.pdf
-    selected_name_base = os.path.splitext(selected_name_full)[0]
-
-    original_text = ""
-    for r_file in st.session_state.resumes_list:
-        if r_file.name == selected_name_full: original_text = read_file_to_text(r_file); break
-
-    tabs = st.tabs(["📊 Insights", "🚀 Performance", "📄 ATS Preview", "✍️ Tailored Resume", "✉️ Cover Letter", "🎙️ Interview Prep", "💾 Export"])
-    
-    with tabs[0]: # Insights
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.metric("Overall Match", f"{data['basic']['score']}%")
-            st.metric("ATS Friendliness", f"{data['basic']['ats']['score']}/100")
-            st.metric("Readability", data['basic']['readability'].get('rating', 'N/A'))
-            st.metric("Action Verbs", data['basic']['action_verbs'])
-        with c2: st.plotly_chart(create_radar_chart(data['basic']), use_container_width=True)
-        present = [k for k, v in data["keywords"].items() if v]
-        missing = [k for k, v in data["keywords"].items() if not v]
-        st.success(f"**Present Keywords ({len(present)}):** {', '.join(present) if present else 'None'}")
-        st.warning(f"**Missing Keywords ({len(missing)}):** {', '.join(missing) if missing else 'None'}")
-
-    with tabs[1]: # Performance
-        st.progress(value=data['performance']['star_analysis'].get('score', 0), text=f"**STAR Method Score: {data['performance']['star_analysis'].get('score', 0)}/100**")
-        with st.expander("**AI Feedback on STAR Method**"):
-            st.markdown(f"**Summary:** {data['performance']['star_analysis'].get('summary', 'N/A')}")
-            st.markdown(f"**Feedback:** {data['performance']['star_analysis'].get('feedback', 'N/A')}")
-        st.markdown(f"**Sentiment:** **{data['performance']['sentiment'].get('label', 'N/A')}** (Score: {data['performance']['sentiment'].get('score', 0.0):.2f})")
-        if data['performance'].get("cliches"): st.info("⚠️ **Clichés Detected:** " + ", ".join(data['performance']["cliches"]))
-    
-    with tabs[2]: # ATS Preview
-        st.subheader("📄 Applicant Tracking System (ATS) Preview")
-        preview_html = generate_ats_preview(original_text, data.get("keywords_list", []))
-        st.markdown(preview_html, unsafe_allow_html=True)
-
-    # --- Generative Tabs ---
-    for key_suffix, tab, title, prompt_template in [
-        ("resume", tabs[3], "✍️ AI-Tailored Resume", "You are an expert resume writer. Perform a surgical, additive-only enhancement of the resume based on the job description. ONLY add missing keywords naturally. Do NOT remove content. Output ONLY the complete, plain-text resume.\n\nJD:\n{jd}\n\nRESUME:\n{resume}"),
-        ("cover_letter", tabs[4], "✉️ AI-Generated Cover Letter", "You are a career coach. Write a compelling 3-4 paragraph cover letter connecting the resume strengths to the job's main requirements. Output ONLY the final cover letter text.\n\nJD:\n{jd}\n\nRESUME:\n{resume}"),
-        ("interview_prep", tabs[5], "🎙️ AI-Generated Interview Prep", "You are an expert interview coach. Create a concise interview prep guide with: Top 3 technical questions, Top 3 behavioral questions, Key talking points for the candidate, and 2 questions for the interviewer. Use markdown.\n\nJD:\n{jd}\n\nRESUME:\n{resume}")
-    ]:
-        key = f"{key_suffix}_{selected_name_full}"
-        with tab:
-            st.subheader(title)
-            if key not in st.session_state:
-                if st.button(f"Generate {title.split(' ')[-1]}", key=f"btn_{key}", use_container_width=True):
-                    with st.spinner("Generating..."):
-                        prompt = prompt_template.format(jd=st.session_state.jd_input, resume=original_text)
-                        st.session_state[key] = call_llm_text(prompt, primary_backend, keys)
-                        st.rerun()
-            if key in st.session_state:
-                st.text_area("Edit the result:", value=st.session_state[key], height=400, key=f"editor_{key}")
-
-    with tabs[6]: # Export
-        st.subheader("💾 Download & Save Center")
-        resume_text_export = st.session_state.get(f"resume_{selected_name_full}", original_text)
-        cover_letter_export = st.session_state.get(f"cover_letter_{selected_name_full}", "")
+    # FIXED: This logic now only runs when a NEW file is uploaded.
+    if jd_file and jd_file.name != st.session_state.processed_jd_name:
+        st.session_state.jd_text = file_to_json(jd_file)["raw_text"]
+        st.session_state.processed_jd_name = jd_file.name
         
-        if st.button("💾 Log Analysis to History", use_container_width=True):
-            log_analysis(job_title="N/A", resume_name=selected_name_full, match_score=data['basic']['score'], ats_score=data['basic']['ats']['score'], tailored_resume_text=resume_text_export, cover_letter_text=cover_letter_export)
-            st.toast("Analysis logged!")
+    st.text_area("JD (editable)", key="jd_text", height=300)
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("#### Tailored Resume")
-            st.download_button("📄 Download DOCX", data=format_docx_stable(resume_text_export, primary_backend, keys), file_name=f"Resume_{selected_name_base}.docx", use_container_width=True, disabled=not resume_text_export)
-            st.download_button("📑 Download PDF", data=format_pdf_stable(resume_text_export, primary_backend, keys), file_name=f"Resume_{selected_name_base}.pdf", use_container_width=True, disabled=not resume_text_export)
-        with c2:
-            st.markdown("#### Cover Letter")
-            st.download_button("✉️ Download DOCX", data=format_docx_stable(cover_letter_export, primary_backend, keys), file_name=f"Cover_Letter_{selected_name_base}.docx", use_container_width=True, disabled=not cover_letter_export)
-            st.download_button("📝 Download PDF", data=format_pdf_stable(cover_letter_export, primary_backend, keys), file_name=f"Cover_Letter_{selected_name_base}.pdf", use_container_width=True, disabled=not cover_letter_export)
+with c2:
+    st.subheader("👤 Your Original Resume")
+    r_file = st.file_uploader("Upload Resume", type=["txt", "pdf", "docx"], key="resume_file")
+    
+    # FIXED: This logic now only runs when a NEW file is uploaded, not on every keystroke.
+    if r_file and r_file.name != st.session_state.processed_resume_name:
+        st.session_state.resume_text = file_to_json(r_file)["raw_text"]
+        st.session_state.processed_resume_name = r_file.name
+        
+        # When a new resume is uploaded, try to extract contact info just once.
+        detected_info = extract_contact_info(st.session_state.resume_text)
+        st.session_state.user_name = detected_info.get("name", "")
+        st.session_state.user_email = detected_info.get("email", "")
+        st.session_state.user_phone = detected_info.get("phone", "")
+        st.session_state.user_linkedin = detected_info.get("linkedin", "")
+        
+    st.text_area("Original Resume (editable fact source)", key="resume_text", height=300)
 
-else:
-    st.info("👋 Welcome! Upload your resume, paste a job description, and click 'Analyze' to begin.")
+st.markdown("---")
+
+# ---------- Optional Contact Details Section ----------
+st.subheader("👤 Verify or Add Contact Details (Optional)")
+st.caption("We'll try to detect these from your resume. You can correct or add them here.")
+
+col1, col2 = st.columns(2)
+with col1:
+    st.text_input("Full Name", key="user_name", placeholder="e.g., Jane Doe")
+    st.text_input("Email Address", key="user_email", placeholder="e.g., jane.doe@email.com")
+with col2:
+    st.text_input("Phone Number", key="user_phone", placeholder="e.g., (123) 456-7890")
+    st.text_input("LinkedIn Profile URL", key="user_linkedin", placeholder="e.g., linkedin.com/in/janedoe")
+
+st.text_input("Extra Link (Portfolio, GitHub, etc.)", key="user_extra", placeholder="e.g., github.com/janedoe")
+
+st.markdown("---")
+st.subheader("🚀 Generate Tailored Assets")
+
+col_full, col_clear = st.columns([3, 1])
+if col_full.button("✨ Synthesize Resume & Cover Letter", use_container_width=True, type="primary"):
+    if not st.session_state.jd_text.strip() or not st.session_state.resume_text.strip():
+        st.warning("Please provide both a Job Description and your Original Resume.")
+    elif not any(keys.values()):
+        st.error("Please enter at least one API key in the sidebar.")
+    else:
+        with st.spinner("AI Expert is crafting your new resume... This may take a moment."):
+            try:
+                # --- LOGIC TO PREPEND CONTACT INFO ---
+                contact_lines = []
+                if st.session_state.user_name:
+                    contact_lines.append(st.session_state.user_name)
+                
+                details_line = []
+                if st.session_state.user_email: details_line.append(st.session_state.user_email)
+                if st.session_state.user_phone: details_line.append(st.session_state.user_phone)
+                if st.session_state.user_linkedin: details_line.append(st.session_state.user_linkedin)
+                if st.session_state.user_extra: details_line.append(st.session_state.user_extra)
+                
+                if details_line:
+                    contact_lines.append(" | ".join(details_line))
+
+                final_resume_input = st.session_state.resume_text
+                if contact_lines:
+                    contact_header = "\n".join(contact_lines)
+                    final_resume_input = f"{contact_header}\n\n---\n\n{st.session_state.resume_text}"
+                
+                res = pipe.run_all(st.session_state.jd_text, final_resume_input, keys)
+                
+                st.session_state.result = res
+                st.success("Synthesis complete! Your new resume and assets are ready below.")
+            except Exception as e:
+                st.error(f"An error occurred during generation: {e}")
+
+if col_clear.button("🧹 Clear Output", use_container_width=True):
+    st.session_state.result = None
+    st.rerun()
+
+# ---------- Results & Export ----------
+if st.session_state.result:
+    res = st.session_state.result
+    st.markdown("---")
+    st.subheader("📊 Analysis of Your New Resume")
+    mr = res["match_report"]
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("JD Match Score", f"{mr.get('match_percentage', 0)}%")
+    k2.metric("ATS Score", f"{mr.get('ats_score', 0)}/100")
+    k3.metric("Readability", mr.get('readability', {}).get('rating', "N/A"))
+    k4.metric("Grade Level", mr.get('readability', {}).get('flesch_grade', "N/A"))
+
+    st.markdown("### ✍️ Your New AI-Synthesized Resume")
+    st.text_area(
+        "Editable Resume Text",
+        value=res.get("tailored_resume", ""),
+        height=450,
+        key="tailored_text_final"
+    )
+
+    exp1, exp2 = st.columns(2)
+    final_resume_text = st.session_state.tailored_text_final
+    try:
+        pdf_io = format_pdf_preserve(final_resume_text)
+        exp1.download_button("⬇️ Download as PDF",
+                           data=pdf_io.getvalue(),
+                           file_name="AI_Tailored_Resume.pdf",
+                           mime="application/pdf",
+                           use_container_width=True)
+    except Exception as e:
+        exp1.error(f"PDF export failed: {e}")
+
+    try:
+        docx_io = format_docx_preserve(final_resume_text)
+        exp2.download_button("⬇️ Download as DOCX",
+                           data=docx_io.getvalue(),
+                           file_name="AI_Tailored_Resume.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           use_container_width=True)
+    except Exception as e:
+        exp2.error(f"DOCX export failed: {e}")
+
+    with st.expander("✉️ View Cover Letter, Interview Prep & Skills Gap"):
+        st.markdown("### ✉️ Cover Letter")
+        st.text_area("Cover Letter Text", value=res.get("cover_letter", ""), height=250)
+        
+        st.markdown("### 🎙️ Interview Prep Guide")
+        st.markdown(res.get("interview_guide", "Not generated."))
+
+        st.markdown("### 🧠 Skills Gap Report")
+        st.json(res.get("skills_gap_report", {}))
