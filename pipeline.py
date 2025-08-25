@@ -1,4 +1,4 @@
-# pipeline.py — Advanced, AI-native resume synthesis pipeline.
+# pipeline.py — AI-native resume synthesis pipeline with line-separated formatting.
 from typing import Dict, List, Tuple
 import json
 import re
@@ -12,6 +12,98 @@ from ai.prompts import (
 )
 
 # ----------------- Helpers -----------------
+def _is_acronym(s: str) -> bool:
+    s2 = s.replace(" ", "")
+    return 2 <= len(s2) <= 6 and s2.isupper() and s2.isalpha()
+
+def _has_number(s: str) -> bool:
+    return bool(re.search(r"\d", s))
+
+def _wordish_variants(kw: str) -> List[str]:
+    forms = {
+        kw,
+        kw.lower(),
+        kw.upper(),
+        re.sub(r"[\s\-_/]+", " ", kw),
+        re.sub(r"[\s\-_/]+", "-", kw),
+        re.sub(r"[\s\-_/]+", "", kw),
+    }
+    base = kw.rstrip("s")
+    forms |= {base, base.lower(), base.upper()}
+    return sorted(set([f for f in forms if f]))
+
+def _salience_rank_keywords(jd_text: str, kws: List[str]) -> List[str]:
+    """
+    Score keywords by signals that indicate 'specially defined/important' in the JD:
+    - frequency
+    - presence in emphasized sections (requirements/must have/qualifications/skills/responsibilities)
+    - presence on bullet lines
+    - acronym bonus (SQL, ETL, CI/CD)
+    - numbered standard bonus (SOC 2, ISO 27001)
+    """
+    text = jd_text or ""
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    sec_headers = re.compile(
+        r"^\s*(requirements?|must[-\s]*have|minimum\s+qualifications?|qualifications?|skills?|technical\s+requirements?|responsibilities?)\s*:?$",
+        re.I
+    )
+    bullet_re = re.compile(r"^\s*[\-\*\u2022\u2023\u25CF\u25AA\u00B7\u2013\u2014]\s+")
+    emphasized_idx = set()
+    in_emph = False
+    for i, ln in enumerate(lines):
+        if sec_headers.match(ln):
+            in_emph = True
+            emphasized_idx.add(i)
+            continue
+        if in_emph and (ln.strip() == "" or (ln.isupper() and len(ln.split()) <= 8)):
+            in_emph = False
+        if in_emph:
+            emphasized_idx.add(i)
+
+    scores = {}
+    low_text = " " + re.sub(r"\s+", " ", text.lower()) + " "
+    for kw in kws:
+        s = 0.0
+        # Frequency across variants
+        freq = 0
+        for v in _wordish_variants(kw):
+            if not v: continue
+            freq += len(re.findall(rf"(?<![A-Za-z0-9]){re.escape(v.lower())}(?![A-Za-z0-9])", low_text))
+        s += min(freq, 5) * 1.5
+
+        # Emphasis section hits
+        hit_emph = 0
+        for i in emphasized_idx:
+            ln_low = " " + lines[i].lower() + " "
+            for v in _wordish_variants(kw):
+                if v and re.search(rf"(?<![A-Za-z0-9]){re.escape(v.lower())}(?![A-Za-z0-9])", ln_low):
+                    hit_emph += 1
+                    break
+        s += min(hit_emph, 5) * 2.0
+
+        # Bullet line hits
+        bullet_hits = 0
+        for ln in lines:
+            if bullet_re.match(ln):
+                ln_low = " " + ln.lower() + " "
+                for v in _wordish_variants(kw):
+                    if v and re.search(rf"(?<![A-Za-z0-9]){re.escape(v.lower())}(?![A-Za-z0-9])", ln_low):
+                        bullet_hits += 1
+                        break
+        s += min(bullet_hits, 5) * 1.2
+
+        if _is_acronym(kw): s += 1.5
+        if _has_number(kw): s += 1.2
+
+        # If JD uses must/required/minimum and kw appears, slight global boost
+        if freq > 0 and re.search(r"(must|required|min(?:imum)?)", low_text):
+            s += 0.8
+
+        scores[kw] = s
+
+    ranked = sorted(kws, key=lambda k: (-scores.get(k, 0.0), k.lower()))
+    return ranked[:60]
+
 def _as_text(x) -> str:
     if isinstance(x, dict):
         return x.get("raw_text", "") or ""
@@ -52,46 +144,84 @@ def _normalize_kw_list(items) -> List[str]:
     out, seen = [], set()
     for x in items or []:
         s = (str(x or "").strip())
-        if len(s) < 2: 
-            continue
+        if len(s) < 2: continue
         key = re.sub(r"[\s\-/_.]+", " ", s.lower()).strip()
-        if key.endswith("s") and len(key) > 3:  # simple plural fold
+        if key.endswith("s") and len(key) > 3:
             key = key[:-1]
         if key not in seen:
             seen.add(key)
             out.append(s)
     return out
 
-# ---------- Keyword presence with variants ----------
-def _kw_variants(kw: str) -> List[str]:
-    k = kw.strip()
-    parts = re.sub(r"[\s\-_]+", " ", k, flags=re.I).split()
-    base = [
-        k,
-        re.sub(r"[\s\-_]+", "-", k),
-        re.sub(r"[\s\-_]+", " ", k),
-        re.sub(r"[\s\-_]+", "", k),
-    ]
-    # plural/singular lightweight variants
-    if len(parts) == 1:
-        p = parts[0]
-        base += [p.rstrip("s"), p + "s", p + "es"]
-    return sorted(set([b.lower() for b in base if b]))
+# ----------------- Formatting helpers -----------------
+def _normalize_headers(line: str) -> str:
+    norm_map = {
+        r"^\s*professional\s+summary\s*$": "PROFILE SUMMARY",
+        r"^\s*summary\s*$": "PROFILE SUMMARY",
+        r"^\s*core\s+skills\s*$": "CORE SKILLS",
+        r"^\s*skills\s*$": "CORE SKILLS",
+        r"^\s*(work\s+experience|experience)\s*$": "WORK EXPERIENCE",
+        r"^\s*education\s*$": "EDUCATION",
+        r"^\s*certifications?\s*$": "CERTIFICATIONS",
+    }
+    for pat, repl in norm_map.items():
+        if re.match(pat, line, flags=re.I):
+            return repl
+    return line
 
-def _contains_kw(text_low: str, kw: str) -> bool:
-    for v in _kw_variants(kw):
-        # allow boundaries around non-alnum; handle hyphen/space joins
-        if re.search(rf"(?:^|[^a-z0-9]){re.escape(v)}(?:[^a-z0-9]|$)", text_low):
-            return True
-    return False
+def _line_separated_skills_block(text: str) -> str:
+    """Ensure CORE SKILLS section is line-separated (one skill per line)."""
+    lines = text.splitlines()
+    out = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        out.append(ln)
+        if re.match(r"^\s*CORE SKILLS\s*$", ln, flags=re.I):
+            j = i + 1
+            buf = []
+            while j < len(lines):
+                nxt = lines[j]
+                if re.match(r"^\s*[A-Z][A-Z\s]{2,}\s*$", nxt) and nxt.strip() not in {"CORE SKILLS"}:
+                    break
+                if nxt.strip():
+                    buf.extend([x.strip() for x in re.split(r"[,\|/;·•]", nxt) if x.strip()])
+                j += 1
+            # dedupe, then add each skill on its own line
+            seen = set()
+            for sk in buf:
+                if sk.lower() not in seen:
+                    seen.add(sk.lower())
+                    out.append(sk)
+            i = j
+            continue
+        i += 1
+    return "\n".join(out)
 
-# ----------------- Post-processor -----------------
+def _line_separated_bullets(text: str) -> str:
+    """Replace bullets/numbering with simple line-separated entries."""
+    lines = []
+    for ln in text.splitlines():
+        # Strip bullets/numbers
+        ln2 = re.sub(r"^\s*[\-\*\u2022\u2023\u25CF\u25AA\u00B7\u2013\u2014\d\.\)]+\s*", "", ln).strip()
+        lines.append(ln2)
+    return "\n".join(lines)
+
 def postprocess_resume_text(text: str) -> str:
     if not text: return ""
     t = text.replace("\r\n", "\n").replace("\u00A0", " ")
-    t = re.sub(r'\*\*(.*?)\*\*', r'\1', t)  # strip markdown bold
+    # remove markdown marks
+    t = re.sub(r'\*\*(.*?)\*\*', r'\1', t)
     t = re.sub(r'^\s*#+\s*(.*?)\s*$', r'\1', t, flags=re.MULTILINE)
-    t = re.sub(r'\n{3,}', '\n\n', t)
+    # normalize headers
+    lines = [_normalize_headers(ln) for ln in t.splitlines()]
+    t = "\n".join(lines)
+    # enforce line-separated bullets
+    t = _line_separated_bullets(t)
+    # enforce line-separated skills
+    t = _line_separated_skills_block(t)
+    # collapse extra blank lines
+    t = re.sub(r"\n{3,}", "\n\n", t)
     return t.strip()
 
 # ----------------- AI-Native Pipeline -----------------
@@ -114,7 +244,8 @@ class ProResumePipeline:
         # 1) JD analysis
         jd_analysis = self._json(jd_analysis_prompt(jd_txt), keys, order)
         job_title = jd_analysis.get("job_title", "the target role")
-        jd_keywords = _normalize_kw_list(jd_analysis.get("keywords", []))
+        jd_keywords_raw = _normalize_kw_list(jd_analysis.get("keywords", []))
+        jd_keywords = _salience_rank_keywords(jd_txt, jd_keywords_raw)
 
         # 2) Synthesis
         tailored_resume = self._text(
@@ -128,11 +259,11 @@ class ProResumePipeline:
         )
         final_resume = postprocess_resume_text(tailored_resume)
 
-        # 3) Post-analysis on the synthesized resume
+        # 3) Post-analysis
         present_keywords, missing_keywords = [], []
         rlow = re.sub(r"[\s\-_]+", " ", (final_resume or "").lower())
         for k in jd_keywords:
-            if _contains_kw(rlow, k):
+            if any(w in rlow for w in [k.lower(), k.lower().rstrip("s"), k.lower()+"s"]):
                 present_keywords.append(k)
             else:
                 missing_keywords.append(k)
@@ -144,7 +275,7 @@ class ProResumePipeline:
         # 4) Cover letter
         cover_letter = self._text(cover_letter_prompt(jd_txt, final_resume, job_title), keys, order)
 
-        # 5) Interview prep & skills gap (gap vs original resume)
+        # 5) Interview & skill gaps
         interview_guide = self._text(interview_prep_prompt(jd_txt, final_resume), keys, order)
         skills_gap_report = self._json(skills_gap_prompt(jd_txt, rs_txt), keys, order)
 

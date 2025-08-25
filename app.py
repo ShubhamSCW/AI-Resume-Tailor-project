@@ -9,7 +9,12 @@ from utils import (
     format_pdf_preserve, format_docx_preserve,
     init_db, get_history, log_analysis,
 )
-
+from utils import (
+    file_to_json, extract_contact_info,
+    format_pdf_preserve, format_docx_preserve,  # existing
+    init_db, get_history, log_analysis,
+    format_pdf_pro_template,                    # ← add this
+)
 st.set_page_config(page_title="ProResumeAI — Expert Synthesis", page_icon="✨", layout="wide")
 
 # ---------- Theme ----------
@@ -197,6 +202,16 @@ if st.session_state.result:
                            use_container_width=True)
     except Exception as e:
         exp1.error(f"PDF export failed: {e}")
+    
+    try:
+        pro_pdf = format_pdf_pro_template(final_resume_text)
+        exp1.download_button("⬇️ Download Pro PDF (Template)",
+                       data=pro_pdf.getvalue(),
+                       file_name="AI_Tailored_Resume_Pro.pdf",
+                       mime="application/pdf",
+                       use_container_width=True)
+    except Exception as e:
+        exp1.error(f"Pro PDF export failed: {e}")
 
     try:
         docx_io = format_docx_preserve(final_resume_text)

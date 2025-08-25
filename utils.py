@@ -625,6 +625,215 @@ def format_docx_preserve(text: str) -> io.BytesIO:
     bio = io.BytesIO()
     doc.save(bio); bio.seek(0)
     return bio
+# ====== Professional Template PDF Exporter (uses existing template.html) ======
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+import os
+
+def _parse_resume_to_struct(text: str) -> Dict[str, Any]:
+    """
+    Heuristic parser: converts plain-text resume into the structure expected by template.html.
+    - First non-empty line = name
+    - Second non-empty line = contact
+    - Section headers are ALL CAPS lines (2+ words or length >= 4)
+    - WORK EXPERIENCE entries: role/company/date heuristics with line items
+    This is conservative and won’t invent content.
+    """
+    lines = [ln.rstrip() for ln in (text or "").splitlines()]
+    lines = [ln for ln in lines if ln is not None]
+
+    # Extract name & contact
+    name = ""
+    contact = ""
+    idx = 0
+    while idx < len(lines) and not lines[idx].strip():
+        idx += 1
+    if idx < len(lines):
+        name = lines[idx].strip()
+        idx += 1
+    while idx < len(lines) and not lines[idx].strip():
+        idx += 1
+    if idx < len(lines):
+        contact = lines[idx].strip()
+        idx += 1
+
+    # Helper: header detection
+    def is_header(ln: str) -> bool:
+        s = (ln or "").strip()
+        if not s:
+            return False
+        if s.isupper() and len(s) >= 4:
+            return True
+        # common header aliases
+        return bool(re.match(r"^\s*(PROFILE\s+SUMMARY|SUMMARY|CORE\s+SKILLS|SKILLS|WORK\s+EXPERIENCE|EXPERIENCE|EDUCATION|CERTIFICATIONS)\s*$", s, re.I))
+
+    # Walk remaining lines to build sections
+    sections: Dict[str, Any] = {}
+    current_title = None
+    bucket: List[str] = []
+
+    def flush_bucket(title: str, buf: List[str]):
+        t = (title or "").strip()
+        if not t:
+            return
+        T = t.upper()
+        content = [b for b in buf if b.strip() != ""]
+        if not content:
+            sections[T] = "" if T in {"PROFILE SUMMARY"} else []
+            return
+
+        if T in {"PROFILE SUMMARY"}:
+            # Join as paragraph
+            sections[T] = " ".join(content)
+        elif T in {"CORE SKILLS", "SKILLS"}:
+            # One per line into a simple list string; template handles mapping/list
+            skills: List[str] = []
+            for ln in content:
+                parts = re.split(r"[,\|/;·•]", ln)
+                for p in parts:
+                    p2 = p.strip()
+                    if p2 and p2.lower() not in {x.lower() for x in skills}:
+                        skills.append(p2)
+            sections["CORE SKILLS"] = ", ".join(skills) if skills else ""
+        elif T in {"WORK EXPERIENCE", "EXPERIENCE"}:
+            # Parse entries separated by blank lines or header-ish patterns
+            entries: List[Dict[str, Any]] = []
+            cur: Dict[str, Any] = {"role": "", "company": "", "date": "", "details": []}
+            def push_cur():
+                nonlocal cur
+                if any(cur.values()):
+                    # remove empties
+                    cur["details"] = [d for d in cur["details"] if d.strip()]
+                    entries.append(cur)
+                cur = {"role": "", "company": "", "date": "", "details": []}
+
+            for ln in buf:
+                s = ln.strip()
+                if not s:
+                    # blank line -> maybe end of entry
+                    if any(cur.values()):
+                        push_cur()
+                    continue
+
+                # Try to detect a header-ish line for an entry (role/company/date)
+                # Examples:
+                #   Senior Data Engineer — ABC Corp | 2021–2024
+                #   Company: ABC Corp   Role: Senior Data Engineer   2019–2022
+                #   ABC Corp — Senior Engineer (2018–2020)
+                if not cur["role"] and (("—" in s) or (" - " in s) or ("|" in s) or ("(" in s and ")" in s)):
+                    # split by common separators
+                    parts = re.split(r"\s+[—\-|]\s+|\s+\|\s+|\s{2,}", s)
+                    # keep it simple – grab likely fields
+                    if len(parts) >= 2:
+                        # heuristic: whichever looks like a company (has Inc/LLC/Corp) or proper-case token set
+                        def looks_company(x: str) -> bool:
+                            x2 = x.lower()
+                            return any(tag in x2 for tag in [" inc", " llc", " ltd", " corp", " corporation", " technologies", " solutions", " labs"])
+                        role = parts[0]
+                        company = ""
+                        date = ""
+                        # scan remaining parts
+                        for p in parts[1:]:
+                            if looks_company(p) and not company:
+                                company = p
+                            elif re.search(r"\b(20\d{2}|19\d{2}).*(20\d{2}|present|Present)\b", p):
+                                date = p
+                        # fallback: if still empty, attempt parentheses date
+                        if not date:
+                            m = re.search(r"\(([^()]*\d{4}[^()]*)\)", s)
+                            if m: date = m.group(1)
+
+                        cur["role"] = role.strip()
+                        cur["company"] = company.strip()
+                        cur["date"] = (date or "").strip()
+                        continue
+
+                # details line
+                body = re.sub(r"^\s*[\-\*\u2022\u2023\u25CF\u25AA\u00B7\u2013\u2014\d\.\)]+\s*", "", s)
+                cur["details"].append(body)
+
+            if any(cur.values()):
+                push_cur()
+
+            sections["WORK EXPERIENCE"] = entries
+        elif T in {"EDUCATION", "CERTIFICATIONS"}:
+            # Keep as simple list
+            items: List[str] = []
+            for ln in content:
+                s = re.sub(r"^\s*[\-\*\u2022\u2023\u25CF\u25AA\u00B7\u2013\u2014\d\.\)]+\s*", "", ln).strip()
+                if s:
+                    items.append(s)
+            sections[T] = items
+        else:
+            # Unknown header: keep as paragraph
+            sections[T] = " ".join(content)
+
+    # Accumulate buckets by headers
+    for i in range(idx, len(lines)):
+        ln = lines[i]
+        if is_header(ln):
+            if current_title is not None:
+                flush_bucket(current_title, bucket)
+            current_title = ln.strip()
+            bucket = []
+        else:
+            if current_title is None:
+                # ignore preface noise
+                continue
+            bucket.append(ln)
+    if current_title is not None:
+        flush_bucket(current_title, bucket)
+
+    return {
+        "name": name or "",
+        "contact": contact or "",
+        "sections": sections
+    }
+
+async def _render_template_html_to_pdf(html_content: str) -> bytes:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(args=["--no-sandbox"])
+        page = await browser.new_page()
+        await page.set_content(html_content)
+        pdf_bytes = await page.pdf(
+            format="A4",
+            print_background=True,
+            margin={"top":"0.5in","bottom":"0.5in","left":"0.5in","right":"0.5in"}
+        )
+        await browser.close()
+        return pdf_bytes
+
+def _load_template_env() -> Environment:
+    # Load from current working dir so it picks up your existing template.html
+    base_dir = os.getcwd()
+    return Environment(
+        loader=FileSystemLoader(base_dir),
+        autoescape=select_autoescape(["html", "xml"])
+    )
+
+def format_pdf_pro_template(text: str) -> io.BytesIO:
+    """
+    Professional template PDF (uses template.html).
+    - Parses plain text resume to structured sections
+    - Renders with Jinja2 and prints to PDF via Playwright
+    NOTE: This renderer aims for professional layout; it does NOT use the
+    strict 'verbatim guard' because it reformats content into a template.
+    """
+    if not (text or "").strip():
+        return io.BytesIO()
+
+    data = _parse_resume_to_struct(text)
+    env = _load_template_env()
+    try:
+        tmpl = env.get_template("template.html")
+    except Exception as e:
+        # Surface a helpful error to Streamlit
+        st.error(f"template.html not found in working directory: {e}")
+        return io.BytesIO()
+
+    html = tmpl.render(**data)
+    pdf_bytes = _run_async(_render_template_html_to_pdf(html))
+    return io.BytesIO(pdf_bytes)
 
 # =========================
 # Exporters — AI layout (indices-only), wording preserved
